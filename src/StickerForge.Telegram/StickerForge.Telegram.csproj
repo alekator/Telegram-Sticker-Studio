@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="WTelegramClient" Version="4.4.11" />
+  </ItemGroup>
+
 </Project>
