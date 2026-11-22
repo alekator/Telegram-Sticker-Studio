@@ -13,6 +13,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Platform;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Avalonia.Controls.Templates;
 
 namespace StickerForge.Desktop;
 
@@ -49,6 +50,9 @@ public sealed class MainWindow : Window
     private string? videoPath;
     private VideoMetadata? videoMetadata;
     private bool updatingSeek;
+    private readonly Border dropZone = new() { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
+    private double previewZoom = 1;
+    private readonly TextBlock galleryHint = new() { Text = "Drop files or folders here, or use Import", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 8) };
 
     public MainWindow()
     {
@@ -70,21 +74,43 @@ public sealed class MainWindow : Window
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
         bottom.Children.Add(status); bottom.Children.Add(progress);
         DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
-        var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("310,*,250"), ColumnSpacing = 12 };
+        var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,4*,2*"), ColumnSpacing = 12 };
         var left = new DockPanel();
         var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
         actions.Children.Add(Button("Remove", RemoveSelected));
         actions.Children.Add(Button("↑", () => MoveSelected(-1)));
         actions.Children.Add(Button("↓", () => MoveSelected(1)));
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
+        DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
         gallery.SelectionChanged += async (_, _) => await SelectAsync();
-        left.Children.Add(gallery);
+        gallery.ItemsPanel = new FuncTemplate<Panel?>(() => new WrapPanel());
+        ScrollViewer.SetHorizontalScrollBarVisibility(gallery, ScrollBarVisibility.Disabled);
+        var menu = new ContextMenu();
+        var remove = new MenuItem { Header = "Remove selected" };
+        remove.Click += async (_, _) => await RemoveSelected();
+        var earlier = new MenuItem { Header = "Move earlier" };
+        earlier.Click += async (_, _) => await MoveSelected(-1);
+        var later = new MenuItem { Header = "Move later" };
+        later.Click += async (_, _) => await MoveSelected(1);
+        menu.Items.Add(remove); menu.Items.Add(earlier); menu.Items.Add(later);
+        gallery.ContextMenu = menu;
+        dropZone.Child = gallery;
+        DragDrop.SetAllowDrop(dropZone, true);
+        dropZone.AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        dropZone.AddHandler(DragDrop.DragLeaveEvent, (_, _) => dropZone.BorderBrush = Brushes.Transparent);
+        dropZone.AddHandler(DragDrop.DropEvent, OnDrop);
+        left.Children.Add(dropZone);
         Grid.SetColumn(left, 0); columns.Children.Add(left);
-        var canvas = new Border { Background = new SolidColorBrush(Color.Parse("#30343b")), Padding = new Thickness(20), CornerRadius = new CornerRadius(8), Child = preview };
+        var layers = new Grid();
+        layers.Children.Add(new Checkerboard());
+        layers.Children.Add(preview);
+        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(8), Child = layers, ClipToBounds = true };
+        canvas.PointerWheelChanged += (_, e) => { previewZoom = Math.Clamp(previewZoom * (e.Delta.Y > 0 ? 1.1 : 1 / 1.1), 0.25, 8); preview.RenderTransform = new ScaleTransform(previewZoom, previewZoom); e.Handled = true; };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
         var properties = new StackPanel { Spacing = 12 };
         properties.Children.Add(new TextBlock { Text = "PROPERTIES", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
+        properties.Children.Add(Button("Fit to window", () => { previewZoom = 1; preview.RenderTransform = null; return Task.CompletedTask; }));
         gifPlay.Click += (_, _) => ToggleGif();
         properties.Children.Add(gifPlay);
         videoPlay.Click += (_, _) => { if (videoPlayback is null) StartVideo(); else StopVideo(); };
@@ -248,7 +274,7 @@ public sealed class MainWindow : Window
             }
         }
         catch (OperationCanceledException) { errors.Add("Import cancelled."); }
-        finally { importing.Dispose(); importing = null; busy = false; RefreshGallery(); }
+        finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; RefreshGallery(); }
         status.Text = $"Imported {added}; errors: {errors.Count}.";
         if (errors.Count > 0)
         {
@@ -279,18 +305,64 @@ public sealed class MainWindow : Window
                 using var stream = new MemoryStream(info.Thumbnail);
                 thumbnail = new Bitmap(stream);
             }
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-            row.Children.Add(new Image { Source = thumbnail, Width = 54, Height = 54, Stretch = Stretch.Uniform });
-            row.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
-            gallery.Items.Add(new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail) });
+            var row = new StackPanel { Width = 116, Spacing = 4 };
+            row.Children.Add(new Image { Source = thumbnail, Width = 110, Height = 110, Stretch = Stretch.Uniform });
+            row.Children.Add(new TextBlock { Text = text, TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 });
+            row.Children.Add(new TextBlock { Text = exists ? Path.GetExtension(name).TrimStart('.').ToUpperInvariant() : "MISSING", FontSize = 10 });
+            var card = new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail), Margin = new Thickness(3) };
+            ToolTip.SetTip(card, item.SourcePath);
+            gallery.Items.Add(card);
         }
         refreshing = false;
+        galleryHint.IsVisible = project.Stickers.Count == 0;
         details.Text = $"{project.Stickers.Count} stickers. Select an image.";
         preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null;
         UpdateTitle();
     }
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        var files = e.DataTransfer.TryGetFiles();
+        e.DragEffects = !busy && files is { Length: > 0 } ? DragDropEffects.Copy : DragDropEffects.None;
+        dropZone.BorderBrush = e.DragEffects == DragDropEffects.Copy ? Brushes.DodgerBlue : Brushes.Transparent;
+        e.Handled = true;
+    }
+    private async void OnDrop(object? sender, DragEventArgs e)
+    {
+        dropZone.BorderBrush = Brushes.Transparent;
+        if (busy) return;
+        var paths = e.DataTransfer.TryGetFiles()?.Select(x => x.TryGetLocalPath()).OfType<string>().ToArray() ?? [];
+        e.Handled = true;
+        var all = new List<string>();
+        var errors = new List<string>();
+        busy = true; importing = new CancellationTokenSource();
+        try
+        {
+            var token = importing.Token;
+            var report = new Progress<int>(count => status.Text = $"Scanning dropped folders: {count} files");
+            foreach (var path in paths)
+            {
+                token.ThrowIfCancellationRequested();
+                if (Directory.Exists(path))
+                {
+                    var scan = await Task.Run(() => new FolderScanner().Scan(path, report, token), token);
+                    all.AddRange(scan.Files); errors.AddRange(scan.Errors);
+                }
+                else all.Add(path);
+            }
+        }
+        catch (OperationCanceledException) { status.Text = "Drop cancelled."; return; }
+        finally { importing.Dispose(); importing = null; busy = false; }
+        await ImportAsync(all);
+        if (errors.Count > 0)
+        {
+            var dialog = new Window { Title = "Folder scan errors", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
+            await dialog.ShowDialog(this);
+        }
+    }
     private async Task SelectAsync()
     {
+        previewZoom = 1; preview.RenderTransform = null;
         ClearVideo();
         StopGif();
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
