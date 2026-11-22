@@ -2,26 +2,23 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
-using System.Numerics;
+using Avalonia.Platform;
+using Avalonia.Rendering.SceneGraph;
+using Avalonia.Skia;
+using ImageSpace.Core;
 
 namespace ImageSpaceAvalonia;
 
 internal sealed class CanvasView : Control, IDisposable
 {
     private readonly Editor editor;
-    private Bitmap? bitmap;
+    private readonly DirectRenderer renderer = new();
     private ViewTransform view = new(1, 20, 20);
     private bool drawing, panning;
     private Point last;
     public event Action? Changed;
-    public CanvasView(Editor editor) { this.editor = editor; ClipToBounds = true; Refresh(); }
-    public void Refresh()
-    {
-        using var stream = new MemoryStream(editor.RenderPng());
-        var next = new Bitmap(stream); var old = bitmap; bitmap = next; old?.Dispose();
-        InvalidateVisual();
-    }
+    public CanvasView(Editor editor) { this.editor = editor; ClipToBounds = true; }
+    public void Refresh() => InvalidateVisual();
     public void Fit()
     {
         var doc = editor.Session.Document;
@@ -44,7 +41,7 @@ internal sealed class CanvasView : Control, IDisposable
                 for (int x = 0; x < doc.Width; x += cell)
                     context.FillRectangle(((x / cell + y / cell) & 1) == 0 ? a : b,
                         new Rect(view.X + x * view.Scale, view.Y + y * view.Scale, cell * view.Scale, cell * view.Scale));
-            if (bitmap is not null) context.DrawImage(bitmap, new Rect(0, 0, bitmap.Size.Width, bitmap.Size.Height), bounds);
+            context.Custom(new DrawOperation(new Rect(Bounds.Size), editor.Session.Document.Snapshot(), view, renderer));
         }
     }
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -82,5 +79,19 @@ internal sealed class CanvasView : Control, IDisposable
         base.OnPointerWheelChanged(e); if (drawing || panning) return;
         var p = e.GetPosition(this); view = view.ZoomAt(e.Delta.Y > 0 ? 1.2 : 1 / 1.2, p.X, p.Y); InvalidateVisual(); e.Handled = true;
     }
-    public void Dispose() { bitmap?.Dispose(); bitmap = null; }
+    public void Dispose() => renderer.Dispose();
+
+    private sealed class DrawOperation(Rect bounds, ImageDocument snapshot, ViewTransform view, DirectRenderer renderer) : ICustomDrawOperation
+    {
+        public Rect Bounds => bounds;
+        public bool HitTest(Point p) => bounds.Contains(p);
+        public bool Equals(ICustomDrawOperation? other) => false;
+        public void Dispose() { }
+        public void Render(ImmediateDrawingContext context)
+        {
+            if (context.TryGetFeature<ISkiaSharpApiLeaseFeature>() is not { } feature) return;
+            using var lease = feature.Lease();
+            renderer.Draw(lease.SkCanvas, snapshot, view);
+        }
+    }
 }

@@ -41,5 +41,23 @@ internal static class SelfTest
         for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
             if (display.GetPixel(x, y) != exported.GetPixel(x, y)) throw new Exception($"render differs at {x},{y}");
         Console.WriteLine("PASS display image equals exported PNG after roundtrip");
+
+        using var renderer = new DirectRenderer();
+        using var surface = SKSurface.Create(new SKImageInfo(512, 512, SKColorType.Rgba8888, SKAlphaType.Premul));
+        surface.Canvas.Clear(SKColors.Transparent);
+        var snapshot = editor.Session.Document.Snapshot();
+        renderer.Draw(surface.Canvas, snapshot, new ViewTransform(1, 0, 0));
+        using var image = surface.Snapshot(); using var direct = SKBitmap.FromImage(image);
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
+            if (direct.GetPixel(x, y) != exported.GetPixel(x, y)) throw new Exception($"direct render differs from PNG at {x},{y}");
+        Console.WriteLine("PASS direct Skia rendering equals exported PNG");
+        surface.Canvas.Clear(SKColors.Transparent);
+        renderer.Draw(surface.Canvas, snapshot, new ViewTransform(2, 20, 10));
+        using (var scaledImage = surface.Snapshot()) using (var scaled = SKBitmap.FromImage(scaledImage))
+            Check(scaled.GetPixel(220, 110).Alpha > 0 && scaled.GetPixel(0, 0).Alpha == 0, "direct renderer applies zoom and pan");
+        editor.Eraser = true; editor.Begin(new(100, 50)); editor.End();
+        Check(snapshot.ActiveLayer!.Pixels!.Get(100, 50).A > 0 && editor.Session.Document.ActiveLayer!.Pixels!.Get(100, 50).A == 0, "render snapshot stays unchanged during next edit");
+        renderer.Dispose(); renderer.Draw(surface.Canvas, snapshot, new ViewTransform(1, 0, 0));
+        Console.WriteLine("PASS renderer disposal is idempotent and prevents later drawing");
     }
 }

@@ -10,6 +10,7 @@ internal static class Program
     public static void Main(string[] args)
     {
         if (args.Contains("--self-test")) { SelfTest.Run(); return; }
+        if (args.Contains("--benchmark")) { Benchmark.Run(); return; }
         AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
     }
 }
