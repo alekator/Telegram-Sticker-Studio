@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 
 namespace StickerForge.Media;
 
 public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec, double? FramesPerSecond = null, bool? HasAlpha = null, long FileSize = 0);
 public sealed record FfmpegAvailability(bool Available, string Message);
+public sealed record VideoFrame(int Width, int Height, double Seconds, byte[] Rgba);
 
 /// <summary>Runs a caller-supplied FFmpeg installation without invoking a shell.</summary>
 public sealed class FfmpegService
@@ -78,6 +80,57 @@ public sealed class FfmpegService
         if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentOutOfRangeException(nameof(seconds));
         return RunAsync(ffmpeg, ["-v", "error", "-protocol_whitelist", "file,pipe", "-ss", seconds.ToString("R", CultureInfo.InvariantCulture),
             "-i", Path.GetFullPath(path), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], 32 * 1024 * 1024, cancellationToken);
+    }
+
+    // A single process emits a bounded stream of frames; reading applies backpressure.
+    public async IAsyncEnumerable<VideoFrame> StreamFramesAsync(string path, VideoMetadata metadata, double startSeconds,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (!double.IsFinite(startSeconds) || startSeconds < 0 || startSeconds >= metadata.DurationSeconds)
+            throw new ArgumentOutOfRangeException(nameof(startSeconds));
+        var scale = Math.Min(1d, 640d / Math.Max(metadata.Width, metadata.Height));
+        var width = Math.Max(1, (int)(metadata.Width * scale));
+        var height = Math.Max(1, (int)(metadata.Height * scale));
+        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
+        await Processes.WaitAsync(cancellationToken);
+        try
+        {
+            var start = new ProcessStartInfo(ffmpeg) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            foreach (var argument in new[] { "-v", "error", "-protocol_whitelist", "file,pipe", "-ss", startSeconds.ToString("R", CultureInfo.InvariantCulture),
+                "-i", Path.GetFullPath(path), "-an", "-vf", $"fps={fps.ToString("R", CultureInfo.InvariantCulture)},scale={width}:{height},format=rgba",
+                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1" }) start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new IOException("Could not start video decoder.");
+            using var registration = cancellationToken.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } });
+            var errors = DrainErrorsAsync(process.StandardError, CancellationToken.None);
+            try
+            {
+                var frameNumber = 0;
+                while (true)
+                {
+                    var bytes = new byte[checked(width * height * 4)];
+                    var offset = 0;
+                    while (offset < bytes.Length)
+                    {
+                        var read = await process.StandardOutput.BaseStream.ReadAsync(bytes.AsMemory(offset), cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                        if (read == 0) break;
+                        offset += read;
+                    }
+                    if (offset == 0) break;
+                    if (offset != bytes.Length) throw new InvalidDataException("Incomplete video frame.");
+                    yield return new VideoFrame(width, height, startSeconds + frameNumber++ / fps, bytes);
+                }
+                await process.WaitForExitAsync(cancellationToken);
+                var errorText = await errors;
+                if (process.ExitCode != 0) throw new InvalidDataException($"Video decoder failed: {errorText.Trim()}");
+            }
+            finally
+            {
+                if (!process.HasExited) process.Kill(true);
+                await process.WaitForExitAsync();
+                await errors;
+            }
+        }
+        finally { Processes.Release(); }
     }
 
     private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken)

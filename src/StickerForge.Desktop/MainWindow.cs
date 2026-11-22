@@ -9,13 +9,18 @@ using Avalonia.Platform.Storage;
 using StickerForge.Core;
 using StickerForge.Infrastructure;
 using StickerForge.Media;
+using Avalonia.Controls.Primitives;
+using Avalonia.Platform;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace StickerForge.Desktop;
 
 public sealed class MainWindow : Window
 {
     private readonly ProjectStore store = new();
-    private readonly ImageImporter importer = new(new SkiaImageDecoder(), FfmpegLocator.CreateDefault());
+    private readonly FfmpegService ffmpeg = FfmpegLocator.CreateDefault();
+    private readonly ImageImporter importer;
     private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TextBox packName = new() { PlaceholderText = "Pack name", Width = 220 };
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
@@ -36,9 +41,18 @@ public sealed class MainWindow : Window
     private string? gifPath;
     private int[]? gifDurations;
     private int gifFrame;
+    private readonly Button videoPlay = new() { Content = "Play", IsVisible = false };
+    private readonly Slider videoSeek = new() { Minimum = 0, Maximum = 1, IsVisible = false };
+    private readonly TextBlock videoTime = new() { IsVisible = false };
+    private CancellationTokenSource? videoPlayback;
+    private CancellationTokenSource? videoSeekRequest;
+    private string? videoPath;
+    private VideoMetadata? videoMetadata;
+    private bool updatingSeek;
 
     public MainWindow()
     {
+        importer = new ImageImporter(new SkiaImageDecoder(), ffmpeg);
         Title = "StickerForge Studio";
         Width = 1280; Height = 760; MinWidth = 820; MinHeight = 520;
         RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
@@ -73,6 +87,21 @@ public sealed class MainWindow : Window
         properties.Children.Add(details);
         gifPlay.Click += (_, _) => ToggleGif();
         properties.Children.Add(gifPlay);
+        videoPlay.Click += (_, _) => { if (videoPlayback is null) StartVideo(); else StopVideo(); };
+        properties.Children.Add(videoPlay);
+        properties.Children.Add(videoSeek);
+        properties.Children.Add(videoTime);
+        videoSeek.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == RangeBase.ValueProperty && !updatingSeek && videoPath is not null)
+            {
+                var playing = videoPlayback is not null;
+                StopVideo();
+                if (playing) StartVideo();
+                else _ = ShowSeekFrameAsync(videoPath, videoSeek.Value, ++previewGeneration);
+                UpdateVideoTime(videoSeek.Value);
+            }
+        };
         Grid.SetColumn(properties, 2); columns.Children.Add(properties);
         root.Children.Add(columns); Content = root;
         packName.TextChanged += (_, _) =>
@@ -82,7 +111,7 @@ public sealed class MainWindow : Window
         };
         KeyDown += OnKeyDown;
         Closing += OnClosing;
-        Closed += (_, _) => StopGif();
+        Closed += (_, _) => { StopGif(); StopVideo(); };
         RefreshGallery();
     }
 
@@ -230,6 +259,7 @@ public sealed class MainWindow : Window
     }
     private void RefreshGallery()
     {
+        ClearVideo();
         StopGif();
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         refreshing = true;
@@ -261,6 +291,7 @@ public sealed class MainWindow : Window
     }
     private async Task SelectAsync()
     {
+        ClearVideo();
         StopGif();
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         var generation = ++previewGeneration;
@@ -285,7 +316,13 @@ public sealed class MainWindow : Window
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{info.Format} · {info.Width} × {info.Height}\n{info.FileSize:N0} bytes";
             if (info.Video is { } video)
-                details.Text += $"\n{video.Codec} · {video.FramesPerSecond?.ToString("0.##") ?? "unknown"} fps\n{video.DurationSeconds:0.00} s · alpha: {(video.HasAlpha == true ? "present" : "unknown")}\nStill frame only — video playback is not available yet.";
+            {
+                details.Text += $"\n{video.Codec} · {video.FramesPerSecond?.ToString("0.##") ?? "unknown"} fps\n{video.DurationSeconds:0.00} s · alpha: {(video.HasAlpha == true ? "present" : "unknown")}";
+                videoPath = item.SourcePath; videoMetadata = video;
+                updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = 0; updatingSeek = false;
+                videoPlay.IsVisible = videoSeek.IsVisible = videoTime.IsVisible = true;
+                UpdateVideoTime(0);
+            }
             if (info.FrameDurations is { Length: > 1 } durations)
             {
                 gifPath = item.SourcePath; gifDurations = durations; gifFrame = 0;
@@ -295,6 +332,79 @@ public sealed class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         { if (generation == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+    }
+    private void UpdateVideoTime(double seconds) => videoTime.Text = $"{TimeSpan.FromSeconds(seconds).ToString(@"mm\:ss\.ff")} / {TimeSpan.FromSeconds(videoMetadata?.DurationSeconds ?? 0).ToString(@"mm\:ss\.ff")}";
+    private void StopVideo()
+    {
+        videoPlayback?.Cancel(); videoPlayback = null; videoPlay.Content = "Play";
+    }
+    private void ClearVideo()
+    {
+        videoSeekRequest?.Cancel(); videoSeekRequest = null;
+        StopVideo(); videoPath = null; videoMetadata = null;
+        videoPlay.IsVisible = videoSeek.IsVisible = videoTime.IsVisible = false;
+        previewGeneration++;
+    }
+    private void StartVideo()
+    {
+        if (videoPath is null || videoMetadata is null) return;
+        videoSeekRequest?.Cancel(); videoSeekRequest = null;
+        var source = new CancellationTokenSource(); videoPlayback = source; videoPlay.Content = "Pause";
+        _ = PlayVideoAsync(videoPath, videoMetadata, videoSeek.Value, source);
+    }
+    private async Task PlayVideoAsync(string path, VideoMetadata metadata, double start, CancellationTokenSource source)
+    {
+        try
+        {
+            while (true)
+            {
+                var clock = Stopwatch.StartNew();
+                var received = false;
+                await foreach (var frame in ffmpeg.StreamFramesAsync(path, metadata, start, source.Token))
+                {
+                    received = true;
+                    var delay = frame.Seconds - start - clock.Elapsed.TotalSeconds;
+                    if (delay > 0) await Task.Delay(TimeSpan.FromSeconds(delay), source.Token);
+                    source.Token.ThrowIfCancellationRequested();
+                    var bitmap = new WriteableBitmap(new PixelSize(frame.Width, frame.Height), new Vector(96, 96), PixelFormat.Rgba8888, AlphaFormat.Unpremul);
+                    using (var locked = bitmap.Lock())
+                        for (var y = 0; y < frame.Height; y++)
+                            Marshal.Copy(frame.Rgba, y * frame.Width * 4, IntPtr.Add(locked.Address, y * locked.RowBytes), frame.Width * 4);
+                    preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+                    updatingSeek = true; videoSeek.Value = Math.Min(frame.Seconds, videoSeek.Maximum); updatingSeek = false;
+                    UpdateVideoTime(frame.Seconds);
+                }
+                source.Token.ThrowIfCancellationRequested();
+                if (!received) throw new InvalidDataException("Video decoder returned no frames.");
+                start = 0;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
+        { status.Text = $"Video playback failed: {ex.Message}"; }
+        finally
+        {
+            if (ReferenceEquals(videoPlayback, source)) { videoPlayback = null; videoPlay.Content = "Play"; }
+            source.Dispose();
+        }
+    }
+    private async Task ShowSeekFrameAsync(string path, double seconds, long generation)
+    {
+        videoSeekRequest?.Cancel();
+        var source = new CancellationTokenSource();
+        videoSeekRequest = source;
+        try
+        {
+            var bytes = await ffmpeg.ReadFrameAsync(path, seconds, source.Token);
+            if (generation != previewGeneration || videoPlayback is not null) return;
+            using var stream = new MemoryStream(bytes);
+            var bitmap = new Bitmap(stream);
+            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
+        { if (generation == previewGeneration) status.Text = $"Seek failed: {ex.Message}"; }
+        finally { if (ReferenceEquals(videoSeekRequest, source)) videoSeekRequest = null; source.Dispose(); }
     }
     private void StopGif()
     {
