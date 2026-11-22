@@ -16,5 +16,7 @@
 Thumbs.db
 *.session
 *.session.*
+*.vault
+publication-journal/
 .env
 .env.*

@@ -3,7 +3,10 @@ using System.Text.Json;
 
 namespace StickerForge.Telegram;
 
-public sealed record TelegramCredentials(int ApiId, string ApiHash, string SessionKey);
+public sealed record TelegramCredentials(int ApiId, string ApiHash, string SessionKey)
+{
+    public override string ToString() => "TelegramCredentials [redacted]";
+}
 
 /// <summary>Password-protected local credentials, independent of OS key-store availability.</summary>
 public static class PasswordVault
@@ -33,8 +36,10 @@ public static class PasswordVault
 
     public static async Task<TelegramCredentials> LoadAsync(string path, string password, CancellationToken cancellationToken = default)
     {
-        var data = await File.ReadAllBytesAsync(path, cancellationToken);
-        if (data.Length < 49 || !data.AsSpan(0, 4).SequenceEqual(Magic) || data.Length > 64 * 1024) throw new InvalidDataException("Invalid vault file.");
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+        if (stream.Length is < 49 or > 64 * 1024) throw new InvalidDataException("Invalid vault file.");
+        var data = new byte[(int)stream.Length]; await stream.ReadExactlyAsync(data, cancellationToken);
+        if (!data.AsSpan(0, 4).SequenceEqual(Magic)) throw new InvalidDataException("Invalid vault file.");
         var key = Rfc2898DeriveBytes.Pbkdf2(password, data.AsSpan(4, 16), Iterations, HashAlgorithmName.SHA256, 32);
         var plaintext = new byte[data.Length - 48];
         try

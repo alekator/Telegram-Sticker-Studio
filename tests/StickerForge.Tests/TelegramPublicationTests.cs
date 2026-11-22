@@ -12,8 +12,9 @@ public sealed class TelegramPublicationTests : IDisposable
         public bool Available = true, Owned = true, FailCreate;
         public int Uploads, Creates;
         public string[] ServerIds = [];
+        public CancellationTokenSource? CancelAfterUpload;
         public Task<bool> IsShortNameAvailableAsync(string name, CancellationToken ct) => Task.FromResult(Available);
-        public Task<string> UploadAsync(byte[] png, CancellationToken ct) { ct.ThrowIfCancellationRequested(); return Task.FromResult($"doc-{++Uploads}"); }
+        public Task<string> UploadAsync(byte[] png, CancellationToken ct) { ct.ThrowIfCancellationRequested(); var id = $"doc-{++Uploads}"; CancelAfterUpload?.Cancel(); return Task.FromResult(id); }
         public Task CreateSetAsync(string title, string name, IReadOnlyList<(string Document, string Emoji)> stickers, CancellationToken ct)
         { Creates++; ServerIds = stickers.Select(s => s.Document).ToArray(); if (FailCreate) throw new IOException("connection lost"); return Task.CompletedTask; }
         public Task<bool> MatchesOwnedSetAsync(string name, IReadOnlyList<string> ids, CancellationToken ct) => Task.FromResult(Owned && ServerIds.Order().SequenceEqual(ids.Order()));
@@ -36,6 +37,8 @@ public sealed class TelegramPublicationTests : IDisposable
         Assert.Equal("https://t.me/addstickers/pack_name", (await Publisher(api).ReconcileAsync("pack_name")).ToString());
         api.ServerIds = ["different"];
         await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        api.ServerIds = ["doc-1", "doc-2"]; api.Owned = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
     }
     [Fact]
     public async Task RejectsTakenNameAndCancellationBeforeUpload()
@@ -46,5 +49,14 @@ public sealed class TelegramPublicationTests : IDisposable
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers(), cancellationToken: cancelled.Token));
         Assert.Equal(0, api.Creates);
+    }
+    [Fact]
+    public async Task CancellationDuringUploadsDoesNotCreateOrReserve()
+    {
+        using var cancelled = new CancellationTokenSource();
+        var api = new FakeApi { CancelAfterUpload = cancelled };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers(), cancellationToken: cancelled.Token));
+        Assert.Equal(1, api.Uploads); Assert.Equal(0, api.Creates);
+        Assert.False(await new PublicationJournal(directory).ExistsAsync("pack_name"));
     }
 }

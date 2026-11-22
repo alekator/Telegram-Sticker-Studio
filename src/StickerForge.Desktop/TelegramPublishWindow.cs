@@ -12,11 +12,11 @@ namespace StickerForge.Desktop;
 internal sealed class TelegramPublishWindow : Window
 {
     private readonly string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StickerForge", "Telegram");
-    private readonly TextBox apiId = new() { PlaceholderText = "API ID" }, apiHash = new() { PlaceholderText = "API hash", PasswordChar = '*' };
-    private readonly TextBox vaultPassword = new() { PlaceholderText = "Local vault password (12+ characters)", PasswordChar = '*' };
-    private readonly TextBox loginInput = new() { PlaceholderText = "Phone, verification code or 2FA password", PasswordChar = '*' };
+    private readonly TextBox apiId = new() { PlaceholderText = "API ID", IsEnabled = false }, apiHash = new() { PlaceholderText = "API hash", PasswordChar = '*', IsEnabled = false };
+    private readonly TextBox vaultPassword = new() { PlaceholderText = "Local vault password (12+ characters)", PasswordChar = '*', IsEnabled = false };
+    private readonly TextBox loginInput = new() { PlaceholderText = "Phone, verification code or 2FA password", PasswordChar = '*', IsEnabled = false };
     private readonly TextBox title = new() { PlaceholderText = "Pack title" }, shortName = new() { PlaceholderText = "Unique short name" };
-    private readonly TextBlock message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Text = "Experimental: use only after the security and publication workflow has been reviewed." };
+    private readonly TextBlock message = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Text = "Telegram publishing is disabled: recovery and security checks are incomplete. Do not enter account credentials." };
     private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1, Height = 12 };
     private readonly List<(string Path, TextBox Emoji)> stickers = [];
     private TelegramLogin? login;
@@ -38,7 +38,7 @@ internal sealed class TelegramPublishWindow : Window
             panel.Children.Add(row); stickers.Add((path, emoji));
         }
         panel.Children.Add(new TextBlock { Text = "2. Telegram credentials and local vault" });
-        panel.Children.Add(new TextBlock { Text = "Get API ID and hash from my.telegram.org. The local password encrypts your credentials and session key; losing it prevents session recovery.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = "Telegram sign-in and publication are disabled until recovery and security checks are complete.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         panel.Children.Add(apiId); panel.Children.Add(apiHash); panel.Children.Add(vaultPassword);
         panel.Children.Add(MakeButton("Open or create local vault", OpenVaultAsync));
         panel.Children.Add(loginInput); panel.Children.Add(MakeButton("Continue login", LoginAsync));
@@ -57,6 +57,7 @@ internal sealed class TelegramPublishWindow : Window
     private Button MakeButton(string label, Func<Task> action)
     {
         var button = new Button { Content = label, HorizontalAlignment = HorizontalAlignment.Stretch };
+        if (label is "Open or create local vault" or "Continue login" or "Log out" or "Check name and publish" or "Recover previous publication") button.IsEnabled = false;
         button.Click += async (_, _) =>
         {
             if (label == "Cancel operation") { operation?.Cancel(); return; }
@@ -73,9 +74,9 @@ internal sealed class TelegramPublishWindow : Window
         CryptographicException => "The local vault password is incorrect or the vault is damaged.",
         TL.RpcException rpc when rpc.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) => $"Telegram rate limit reached. Wait {rpc.X} seconds before retrying.",
         TL.RpcException => "Telegram rejected the request. Check the account, code or pack details.",
-        ArgumentException => ex.Message,
-        InvalidDataException => ex.Message,
-        InvalidOperationException => ex.Message,
+        ArgumentException => "Check the pack details and local settings.",
+        InvalidDataException => "The image or local data could not be read.",
+        InvalidOperationException => "The operation cannot continue in its current state.",
         _ => "The operation failed. Check your connection and input; no credentials are shown in this message."
     };
     private async Task OpenVaultAsync()
