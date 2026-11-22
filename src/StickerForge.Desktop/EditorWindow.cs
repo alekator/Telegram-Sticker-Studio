@@ -26,6 +26,8 @@ internal sealed class EditorWindow : Window
     private readonly TextBlock status = new() { Text = "Wheel: zoom · middle drag: pan" };
     private bool updating;
     private bool modified;
+    private bool closeConfirmed;
+    private bool closePromptOpen;
 
     public EditorWindow(GraphicsSession editor, Action<byte[], byte[]> save)
     {
@@ -40,7 +42,7 @@ internal sealed class EditorWindow : Window
         Add(tools, "Undo", () => { editor.Session.Undo(); modified = true; UpdateAll(); });
         Add(tools, "Redo", () => { editor.Session.Redo(); modified = true; UpdateAll(); });
         Add(tools, "Fit", canvas.Fit);
-        Add(tools, "Save", Apply);
+        Add(tools, "Apply to project", Apply);
         Add(tools, "Back to gallery", Close);
         DockPanel.SetDock(tools, Dock.Top); root.Children.Add(tools);
         DockPanel.SetDock(status, Dock.Bottom); root.Children.Add(status);
@@ -53,7 +55,7 @@ internal sealed class EditorWindow : Window
         Add(side, "Move down", () => { editor.Session.MoveLayer(-1); modified = true; UpdateAll(); });
         DockPanel.SetDock(side, Dock.Right); root.Children.Add(side); root.Children.Add(canvas); Content = root;
         Opened += (_, _) => { canvas.Fit(); UpdateLayers(); };
-        Closing += (_, e) => { try { if (editor.Session.IsInTransaction) { editor.End(); modified = true; } if (modified) Apply(); } catch (Exception ex) { e.Cancel = true; status.Text = $"Save failed: {ex.Message}"; } };
+        Closing += OnClosing;
         Closed += (_, _) => { canvas.Dispose(); editor.Dispose(); };
         UpdateLayers();
     }
@@ -74,6 +76,45 @@ internal sealed class EditorWindow : Window
     private void Apply()
     {
         if (!modified) { status.Text = "No changes"; return; }
-        save(editor.Save(), editor.Thumbnail()); modified = false; status.Text = "Editing changes added to project. Save the project to write them to disk.";
+        save(editor.Save(), editor.Thumbnail()); modified = false; status.Text = "Applied to project in memory. Use Save in the gallery to write the project to disk.";
+    }
+
+    private enum CloseChoice { Continue, Apply, Discard }
+
+    private async void OnClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (closeConfirmed) return;
+        if (editor.Session.IsInTransaction)
+        {
+            e.Cancel = true;
+            try { editor.End(); modified = true; }
+            catch (Exception ex) { status.Text = $"Could not finish stroke: {ex.Message}. Your editor remains open."; return; }
+        }
+        if (!modified) return;
+        e.Cancel = true;
+        if (closePromptOpen) return;
+        closePromptOpen = true;
+        try
+        {
+            var dialog = new Window { Title = "Unapplied editor changes", Width = 540, Height = 210, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var panel = new StackPanel { Margin = new Thickness(20), Spacing = 16 };
+            panel.Children.Add(new TextBlock { Text = "Apply these edits to the project? To save them to disk, save the project after returning to the gallery.", TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+            var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
+            AddChoice("Apply changes", CloseChoice.Apply);
+            AddChoice("Discard changes", CloseChoice.Discard);
+            AddChoice("Continue editing", CloseChoice.Continue);
+            panel.Children.Add(buttons); dialog.Content = panel;
+            var choice = await dialog.ShowDialog<CloseChoice>(this);
+            if (choice == CloseChoice.Continue) return;
+            if (choice == CloseChoice.Apply) Apply();
+            closeConfirmed = true; Close();
+            void AddChoice(string text, CloseChoice value)
+            {
+                var button = new Button { Content = text, Margin = new Thickness(0, 0, 8, 4) };
+                button.Click += (_, _) => dialog.Close(value); buttons.Children.Add(button);
+            }
+        }
+        catch (Exception ex) { status.Text = $"Could not apply edits: {ex.Message}. Your edits are still open."; }
+        finally { closePromptOpen = false; }
     }
 }

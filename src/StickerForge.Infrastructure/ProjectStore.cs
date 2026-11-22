@@ -72,7 +72,12 @@ public sealed class ProjectStore
         };
         for (var i = 0; i < model.Stickers.Count; i++)
             if (model.Stickers[i].EditDocument is { } edit)
-                result.Stickers[i].EditableDocument = await File.ReadAllBytesAsync(Path.GetFullPath(edit, directory), cancellationToken);
+            {
+                var assetPath = Path.GetFullPath(edit, directory);
+                try { result.Stickers[i].EditableDocument = await File.ReadAllBytesAsync(assetPath, cancellationToken); }
+                catch (FileNotFoundException ex) { throw new FileNotFoundException($"Editable document is missing: {assetPath}. Restore the project .assets folder and try again.", assetPath, ex); }
+                catch (DirectoryNotFoundException ex) { throw new DirectoryNotFoundException($"Project .assets folder is missing for editable document: {assetPath}. Restore it and try again.", ex); }
+            }
         return result;
     }
 }

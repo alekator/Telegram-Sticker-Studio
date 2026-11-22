@@ -19,7 +19,12 @@ public sealed class GraphicsSession : IDisposable
     private GraphicsSession(ImageDocument document) => Session = new EditorSession(document);
     public static GraphicsSession Open(string source, byte[]? saved)
     {
-        if (saved is not null) return new GraphicsSession(DocumentArchive.Load(saved));
+        if (saved is not null)
+        {
+            try { return new GraphicsSession(DocumentArchive.Load(saved)); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or InvalidOperationException or System.Text.Json.JsonException or NotSupportedException)
+            { throw new InvalidDataException("The editable ImageSpace document is damaged or unsupported. The project and original have not been changed.", ex); }
+        }
         var pixels = ImageRenderer.Decode(File.ReadAllBytes(source));
         var document = new ImageDocument(pixels.Width, pixels.Height, Path.GetFileNameWithoutExtension(source));
         var layer = Layer.Raster("Original", pixels.Width, pixels.Height); layer.Pixels = pixels;
