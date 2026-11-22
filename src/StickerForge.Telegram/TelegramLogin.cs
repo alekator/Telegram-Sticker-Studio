@@ -25,6 +25,7 @@ public sealed class TelegramLogin : IDisposable
     /// <summary>First supply a phone number; subsequent calls supply the requested code or 2FA password.</summary>
     public Task<string?> ContinueAsync(string input) => client.Login(input);
     public bool IsAuthenticated => client.UserId != 0;
+    public long UserId => client.UserId;
     internal Client Client => client;
     public async Task LogoutAsync() => await client.Auth_LogOut();
     public void Dispose() => client.Dispose();

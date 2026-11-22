@@ -23,6 +23,7 @@ internal sealed class TelegramPublishWindow : Window
     private CancellationTokenSource? operation;
     private bool busy, loginConfirmed;
     private string? link;
+    private string? journalKey;
 
     public TelegramPublishWindow(string[] paths, string projectName)
     {
@@ -70,10 +71,14 @@ internal sealed class TelegramPublishWindow : Window
     }
     private static string SafeError(Exception ex) => ex switch
     {
+        PublicationUncertainException { InnerException: TL.RpcException rpc } when rpc.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) => $"Result uncertain. Wait {rpc.X} seconds, then use Recover; do not create the pack again.",
+        PublicationUncertainException { InnerException: TL.RpcException rpc } when rpc.Message.Contains("FILE_REFERENCE", StringComparison.Ordinal) => "An uploaded file reference expired. Automatic recovery stopped; investigate the existing Telegram pack before taking further action.",
         PublicationUncertainException => "The result is uncertain. Use Recover; do not create the pack again.",
         CryptographicException => "The local vault password is incorrect or the vault is damaged.",
         TL.RpcException rpc when rpc.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) => $"Telegram rate limit reached. Wait {rpc.X} seconds before retrying.",
         TL.RpcException => "Telegram rejected the request. Check the account, code or pack details.",
+        System.Net.Http.HttpRequestException => "Network error. Check the connection and retry only after checking the pack state.",
+        FileNotFoundException => "A required local file is missing. Check the project sources.",
         ArgumentException => "Check the pack details and local settings.",
         InvalidDataException => "The image or local data could not be read.",
         InvalidOperationException => "The operation cannot continue in its current state.",
@@ -92,6 +97,7 @@ internal sealed class TelegramPublishWindow : Window
             await Task.Run(() => PasswordVault.SaveAsync(path, credentials, password));
         }
         login = new TelegramLogin(credentials.ApiId, credentials.ApiHash, Path.Combine(dataDir, "account.session"), credentials.SessionKey);
+        journalKey = credentials.SessionKey;
         apiId.Text = ""; apiHash.Text = ""; vaultPassword.Text = ""; message.Text = "Vault opened. Enter your phone number and continue login; existing sessions can be resumed.";
     }
     private async Task LoginAsync()
@@ -106,11 +112,15 @@ internal sealed class TelegramPublishWindow : Window
     {
         if (operation is not null) throw new InvalidOperationException("Wait for the current operation to finish.");
         if (login is null) return;
-        await login.LogoutAsync(); login.Dispose(); login = null; loginConfirmed = false;
-        var path = Path.Combine(dataDir, "account.session"); if (File.Exists(path)) File.Delete(path);
-        message.Text = "Logged out. The encrypted vault remains available.";
+        var accountJournal = Path.Combine(dataDir, "publication-journal", login.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (Directory.Exists(accountJournal) && Directory.EnumerateFiles(accountJournal, "*.journal").Any())
+            throw new InvalidOperationException("Resolve saved publication journals before removing their encryption key.");
+        var current = login;
+        await LogoutService.RevokeAndRemoveAsync(current.LogoutAsync, () => { current.Dispose(); login = null; journalKey = null; loginConfirmed = false; },
+            Path.Combine(dataDir, "account.session"), Path.Combine(dataDir, "credentials.vault"));
+        message.Text = "Logged out and local session and vault removed.";
     }
-    private TelegramPublication Publisher() => new(new WTelegramStickerApi(login ?? throw new InvalidOperationException("Sign in first.")), new PublicationJournal(Path.Combine(dataDir, "publication-journal")));
+    private TelegramPublication Publisher() => new(new WTelegramStickerApi(login ?? throw new InvalidOperationException("Sign in first.")), new PublicationJournal(Path.Combine(dataDir, "publication-journal"), login!.UserId, journalKey ?? throw new InvalidOperationException("Vault is locked.")));
     private async Task PublishAsync()
     {
         if (login is null || !loginConfirmed || !login.IsAuthenticated) throw new InvalidOperationException("Sign in to Telegram first.");
