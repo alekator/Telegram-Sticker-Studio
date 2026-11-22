@@ -31,6 +31,11 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? importing;
     private long previewGeneration;
     private Bitmap? previewBitmap;
+    private readonly Button gifPlay = new() { Content = "Play", IsVisible = false };
+    private CancellationTokenSource? gifPlayback;
+    private string? gifPath;
+    private int[]? gifDurations;
+    private int gifFrame;
 
     public MainWindow()
     {
@@ -66,6 +71,8 @@ public sealed class MainWindow : Window
         var properties = new StackPanel { Spacing = 12 };
         properties.Children.Add(new TextBlock { Text = "PROPERTIES", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
+        gifPlay.Click += (_, _) => ToggleGif();
+        properties.Children.Add(gifPlay);
         Grid.SetColumn(properties, 2); columns.Children.Add(properties);
         root.Children.Add(columns); Content = root;
         packName.TextChanged += (_, _) =>
@@ -75,6 +82,7 @@ public sealed class MainWindow : Window
         };
         KeyDown += OnKeyDown;
         Closing += OnClosing;
+        Closed += (_, _) => StopGif();
         RefreshGallery();
     }
 
@@ -222,6 +230,8 @@ public sealed class MainWindow : Window
     }
     private void RefreshGallery()
     {
+        StopGif();
+        gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         refreshing = true;
         packName.Text = project.Name;
         previewGeneration++;
@@ -251,6 +261,8 @@ public sealed class MainWindow : Window
     }
     private async Task SelectAsync()
     {
+        StopGif();
+        gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         var generation = ++previewGeneration;
         if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
         var item = entry.Item;
@@ -264,15 +276,62 @@ public sealed class MainWindow : Window
                 if (result.Info is null) { details.Text = result.Error; return; }
                 info = result.Info; cache[item.Id] = info;
             }
-            var bytes = await Task.Run(() => File.ReadAllBytes(item.SourcePath));
+            var bytes = info.FrameDurations is not null
+                ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, 0))
+                : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (generation != previewGeneration) return;
             using var stream = new MemoryStream(bytes);
             var bitmap = new Bitmap(stream);
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{info.Format} · {info.Width} × {info.Height}\n{info.FileSize:N0} bytes";
+            if (info.FrameDurations is { Length: > 1 } durations)
+            {
+                gifPath = item.SourcePath; gifDurations = durations; gifFrame = 0;
+                details.Text += $"\n{durations.Sum() / 1000d:0.00} s · {durations.Length} frames";
+                gifPlay.IsVisible = true;
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         { if (generation == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+    }
+    private void StopGif()
+    {
+        gifPlayback?.Cancel();
+        gifPlayback = null;
+        gifPlay.Content = "Play";
+    }
+    private void ToggleGif()
+    {
+        if (gifPlayback is not null) { StopGif(); return; }
+        if (gifPath is null || gifDurations is null) return;
+        var source = new CancellationTokenSource();
+        gifPlayback = source;
+        gifPlay.Content = "Pause";
+        _ = PlayGifAsync(gifPath, gifDurations, source);
+    }
+    private async Task PlayGifAsync(string path, int[] durations, CancellationTokenSource source)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(Math.Max(durations[gifFrame], 20), source.Token);
+                var next = (gifFrame + 1) % durations.Length;
+                var bytes = await Task.Run(() => GifFrameReader.ReadFrame(path, next, source.Token), source.Token);
+                source.Token.ThrowIfCancellationRequested();
+                using var stream = new MemoryStream(bytes);
+                var bitmap = new Bitmap(stream);
+                preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap; gifFrame = next;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        { status.Text = $"GIF playback failed: {ex.Message}"; }
+        finally
+        {
+            if (ReferenceEquals(gifPlayback, source)) { gifPlayback = null; gifPlay.Content = "Play"; }
+            source.Dispose();
+        }
     }
     private Task RemoveSelected()
     {

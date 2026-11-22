@@ -3,7 +3,7 @@ using StickerForge.Core;
 
 namespace StickerForge.Media;
 
-public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail);
+public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail, int[]? FrameDurations = null);
 public sealed record ImportResult(string Path, StickerItem? Item, ImageInfo? Info, string? Error);
 public interface IImageDecoder
 {
@@ -20,9 +20,10 @@ public sealed class SkiaImageDecoder : IImageDecoder
         using var stream = File.OpenRead(path);
         using var codec = SKCodec.Create(stream) ?? throw new InvalidDataException("Unsupported or corrupt image.");
         var format = codec.EncodedFormat;
-        if (format is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp or SKEncodedImageFormat.Bmp))
-            throw new InvalidDataException("Supported still images: PNG, JPEG, WEBP and BMP. GIF and video support is not yet available.");
-        if (codec.FrameCount > 1) throw new InvalidDataException("Animated images are not yet supported.");
+        if (format is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp or SKEncodedImageFormat.Bmp or SKEncodedImageFormat.Gif))
+            throw new InvalidDataException("Unsupported image. Video support is not yet available.");
+        if (format != SKEncodedImageFormat.Gif && codec.FrameCount > 1) throw new InvalidDataException("Animated images other than GIF are not yet supported.");
+        if (codec.FrameCount > 1000) throw new InvalidDataException("GIF exceeds the frame limit.");
         var info = codec.Info;
         if (info.Width <= 0 || info.Height <= 0 || (long)info.Width * info.Height > 40_000_000)
             throw new InvalidDataException("Image dimensions exceed the limit.");
@@ -35,7 +36,8 @@ public sealed class SkiaImageDecoder : IImageDecoder
             ?? throw new InvalidDataException("Unable to create thumbnail.");
         using var image = SKImage.FromBitmap(resized);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        return new ImageInfo(format.ToString(), info.Width, info.Height, file.Length, data.ToArray());
+        var durations = format == SKEncodedImageFormat.Gif ? codec.FrameInfo.Select(f => f.Duration).ToArray() : null;
+        return new ImageInfo(format.ToString(), info.Width, info.Height, file.Length, data.ToArray(), durations);
     }
 }
 
