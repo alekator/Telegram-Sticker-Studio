@@ -1,4 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
 <ItemGroup><PackageReference Include="Avalonia.Desktop" Version="12.1.6" /><PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" /></ItemGroup>
+<ItemGroup>
+  <ProjectReference Include="../StickerForge.Core/StickerForge.Core.csproj" />
+  <ProjectReference Include="../StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
+  <ProjectReference Include="../StickerForge.Media/StickerForge.Media.csproj" />
+</ItemGroup>
 </Project>

@@ -1,0 +1,289 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
+using StickerForge.Core;
+using StickerForge.Infrastructure;
+using StickerForge.Media;
+
+namespace StickerForge.Desktop;
+
+public sealed class MainWindow : Window
+{
+    private readonly ProjectStore store = new();
+    private readonly ImageImporter importer = new(new SkiaImageDecoder());
+    private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
+    private readonly TextBox packName = new() { PlaceholderText = "Pack name", Width = 220 };
+    private readonly Image preview = new() { Stretch = Stretch.Uniform };
+    private readonly TextBlock details = new() { Text = "Select an image", TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock status = new() { Text = "Ready" };
+    private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1, Width = 150, Height = 8 };
+    private readonly Dictionary<Guid, ImageInfo> cache = [];
+    private StickerProject project = new();
+    private string? projectPath;
+    private bool dirty;
+    private bool refreshing;
+    private bool busy;
+    private CancellationTokenSource? importing;
+    private long previewGeneration;
+    private Bitmap? previewBitmap;
+
+    public MainWindow()
+    {
+        Title = "StickerForge Studio";
+        Width = 1280; Height = 760; MinWidth = 820; MinHeight = 520;
+        RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
+        var root = new DockPanel { Margin = new Thickness(14) };
+        var top = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+        top.Children.Add(Button("New", async () => await NewAsync(), "Ctrl+N"));
+        top.Children.Add(Button("Open", async () => await OpenAsync(), "Ctrl+O"));
+        top.Children.Add(Button("Save", async () => await SaveAsync(false), "Ctrl+S"));
+        top.Children.Add(Button("Save as", async () => await SaveAsync(true), "Ctrl+Shift+S"));
+        top.Children.Add(packName);
+        top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
+        top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
+        top.Children.Add(Button("Cancel import", () => { importing?.Cancel(); return Task.CompletedTask; }));
+        DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
+        var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
+        bottom.Children.Add(status); bottom.Children.Add(progress);
+        DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
+        var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("310,*,250"), ColumnSpacing = 12 };
+        var left = new DockPanel();
+        var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        actions.Children.Add(Button("Remove", RemoveSelected));
+        actions.Children.Add(Button("↑", () => MoveSelected(-1)));
+        actions.Children.Add(Button("↓", () => MoveSelected(1)));
+        DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
+        gallery.SelectionChanged += async (_, _) => await SelectAsync();
+        left.Children.Add(gallery);
+        Grid.SetColumn(left, 0); columns.Children.Add(left);
+        var canvas = new Border { Background = new SolidColorBrush(Color.Parse("#30343b")), Padding = new Thickness(20), CornerRadius = new CornerRadius(8), Child = preview };
+        Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
+        var properties = new StackPanel { Spacing = 12 };
+        properties.Children.Add(new TextBlock { Text = "PROPERTIES", FontWeight = FontWeight.Bold });
+        properties.Children.Add(details);
+        Grid.SetColumn(properties, 2); columns.Children.Add(properties);
+        root.Children.Add(columns); Content = root;
+        packName.TextChanged += (_, _) =>
+        {
+            var name = packName.Text ?? "";
+            if (!refreshing && !busy && project.Name != name) { project.Name = name; MarkDirty(); }
+        };
+        KeyDown += OnKeyDown;
+        Closing += OnClosing;
+        RefreshGallery();
+    }
+
+    private static Button Button(string text, Func<Task> action, string? tooltip = null)
+    {
+        var button = new Button { Content = text, Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(10, 6) };
+        if (tooltip is not null) ToolTip.SetTip(button, tooltip);
+        button.Click += async (_, _) => await action();
+        return button;
+    }
+    private void MarkDirty() { dirty = true; UpdateTitle(); }
+    private void UpdateTitle() => Title = $"StickerForge Studio — {project.Name}{(dirty ? " *" : "")}";
+
+    private async Task<bool> ConfirmDiscardAsync()
+    {
+        if (!dirty) return true;
+        var dialog = new Window { Title = "Unsaved changes", Width = 390, Height = 160, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var panel = new StackPanel { Margin = new Thickness(20), Spacing = 16 };
+        panel.Children.Add(new TextBlock { Text = "Discard unsaved changes?" });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        buttons.Children.Add(Button("Discard", () => { dialog.Close(true); return Task.CompletedTask; }));
+        buttons.Children.Add(Button("Cancel", () => { dialog.Close(false); return Task.CompletedTask; }));
+        panel.Children.Add(buttons); dialog.Content = panel;
+        return await dialog.ShowDialog<bool>(this);
+    }
+    private async void OnClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (!dirty && !busy) return;
+        e.Cancel = true;
+        if (busy) { status.Text = "Cancel the import before closing."; return; }
+        if (await ConfirmDiscardAsync()) { dirty = false; Close(); }
+    }
+    private async Task NewAsync()
+    {
+        if (busy || !await ConfirmDiscardAsync()) return;
+        project = new(); projectPath = null; dirty = false; cache.Clear(); RefreshGallery();
+    }
+    private async Task OpenAsync()
+    {
+        if (busy || !await ConfirmDiscardAsync()) return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Open project", AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("StickerForge project") { Patterns = ["*.stickerforge.json"] }] });
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (path is null) return;
+        try
+        {
+            project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); RefreshGallery();
+            await LoadThumbnailsAsync();
+            status.Text = "Project opened";
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+        { status.Text = $"Open failed: {ex.Message}"; }
+    }
+    private async Task LoadThumbnailsAsync()
+    {
+        busy = true;
+        try
+        {
+            foreach (var item in project.Stickers)
+            {
+                if (!File.Exists(item.SourcePath)) continue;
+                var result = (await importer.ImportAsync([item.SourcePath]))[0];
+                if (result.Info is not null) cache[item.Id] = result.Info;
+            }
+        }
+        finally { busy = false; RefreshGallery(); }
+    }
+    private async Task<bool> SaveAsync(bool saveAs)
+    {
+        if (busy) return false;
+        var path = saveAs ? null : projectPath;
+        if (path is null)
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Save project", SuggestedFileName = "pack.stickerforge.json",
+                FileTypeChoices = [new FilePickerFileType("StickerForge project") { Patterns = ["*.stickerforge.json"] }] });
+            path = file?.TryGetLocalPath();
+        }
+        if (path is null) return false;
+        try { await store.SaveAsync(project, path); projectPath = path; dirty = false; UpdateTitle(); status.Text = "Project saved"; return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { status.Text = $"Save failed: {ex.Message}"; return false; }
+    }
+    private async Task PickFilesAsync()
+    {
+        if (busy) return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import images", AllowMultiple = true });
+        await ImportAsync(files.Select(f => f.TryGetLocalPath()).OfType<string>());
+    }
+    private async Task PickFolderAsync()
+    {
+        if (busy) return;
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Import folder", AllowMultiple = false });
+        var path = folders.FirstOrDefault()?.TryGetLocalPath();
+        if (path is null) return;
+        try { await ImportAsync(await Task.Run(() => Directory.GetFiles(path))); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { status.Text = $"Folder error: {ex.Message}"; }
+    }
+    private async Task ImportAsync(IEnumerable<string> paths)
+    {
+        if (busy) return;
+        var files = paths.ToArray(); if (files.Length == 0) return;
+        busy = true; importing = new CancellationTokenSource();
+        var errors = new List<string>(); var added = 0;
+        try
+        {
+            for (var i = 0; i < files.Length; i++)
+            {
+                importing.Token.ThrowIfCancellationRequested();
+                var results = await importer.ImportAsync([files[i]], cancellationToken: importing.Token);
+                var result = results[0];
+                if (result.Item is not null && result.Info is not null)
+                { project.Stickers.Add(result.Item); cache[result.Item.Id] = result.Info; added++; MarkDirty(); }
+                else errors.Add($"{Path.GetFileName(result.Path)}: {result.Error}");
+                progress.Value = (i + 1d) / files.Length;
+                status.Text = $"Importing {i + 1}/{files.Length}";
+            }
+        }
+        catch (OperationCanceledException) { errors.Add("Import cancelled."); }
+        finally { importing.Dispose(); importing = null; busy = false; RefreshGallery(); }
+        status.Text = $"Imported {added}; errors: {errors.Count}.";
+        if (errors.Count > 0)
+        {
+            var dialog = new Window { Title = "Import report", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
+            await dialog.ShowDialog(this);
+        }
+    }
+    private void RefreshGallery()
+    {
+        refreshing = true;
+        packName.Text = project.Name;
+        previewGeneration++;
+        foreach (var old in gallery.Items.OfType<ListBoxItem>())
+            if (old.Tag is GalleryEntry entry) entry.Thumbnail?.Dispose();
+        gallery.Items.Clear();
+        foreach (var item in project.Stickers)
+        {
+            var name = Path.GetFileName(item.SourcePath);
+            var exists = File.Exists(item.SourcePath);
+            var text = exists ? name : $"{name} — missing";
+            Bitmap? thumbnail = null;
+            if (cache.TryGetValue(item.Id, out var info))
+            {
+                using var stream = new MemoryStream(info.Thumbnail);
+                thumbnail = new Bitmap(stream);
+            }
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            row.Children.Add(new Image { Source = thumbnail, Width = 54, Height = 54, Stretch = Stretch.Uniform });
+            row.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+            gallery.Items.Add(new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail) });
+        }
+        refreshing = false;
+        details.Text = $"{project.Stickers.Count} stickers. Select an image.";
+        preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null;
+        UpdateTitle();
+    }
+    private async Task SelectAsync()
+    {
+        var generation = ++previewGeneration;
+        if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
+        var item = entry.Item;
+        details.Text = $"Loading {Path.GetFileName(item.SourcePath)}…";
+        try
+        {
+            if (!cache.TryGetValue(item.Id, out var info))
+            {
+                var result = (await importer.ImportAsync([item.SourcePath]))[0];
+                if (generation != previewGeneration) return;
+                if (result.Info is null) { details.Text = result.Error; return; }
+                info = result.Info; cache[item.Id] = info;
+            }
+            var bytes = await Task.Run(() => File.ReadAllBytes(item.SourcePath));
+            if (generation != previewGeneration) return;
+            using var stream = new MemoryStream(bytes);
+            var bitmap = new Bitmap(stream);
+            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            details.Text = $"{Path.GetFileName(item.SourcePath)}\n{info.Format} · {info.Width} × {info.Height}\n{info.FileSize:N0} bytes";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { if (generation == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+    }
+    private Task RemoveSelected()
+    {
+        if (busy) return Task.CompletedTask;
+        var selected = gallery.SelectedItems?.OfType<ListBoxItem>().Select(x => ((GalleryEntry)x.Tag!).Item).ToArray() ?? [];
+        if (selected.Length == 0) return Task.CompletedTask;
+        foreach (var item in selected) { project.Stickers.Remove(item); cache.Remove(item.Id); }
+        MarkDirty(); RefreshGallery(); return Task.CompletedTask;
+    }
+    private Task MoveSelected(int delta)
+    {
+        if (busy || gallery.SelectedItems?.Count != 1 || gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return Task.CompletedTask;
+        var item = entry.Item;
+        var index = project.Stickers.IndexOf(item); var target = index + delta;
+        if (target < 0 || target >= project.Stickers.Count) return Task.CompletedTask;
+        project.Stickers.RemoveAt(index); project.Stickers.Insert(target, item); MarkDirty(); RefreshGallery(); gallery.SelectedIndex = target;
+        return Task.CompletedTask;
+    }
+    private async void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (e.Key == Key.N) await NewAsync();
+            else if (e.Key == Key.O) await OpenAsync();
+            else if (e.Key == Key.S) await SaveAsync(e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            else if (e.Key == Key.I) await PickFilesAsync();
+            else return;
+            e.Handled = true;
+        }
+    }
+    private sealed record GalleryEntry(StickerItem Item, Bitmap? Thumbnail);
+}

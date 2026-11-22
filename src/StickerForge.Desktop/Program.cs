@@ -14,7 +14,7 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            desktop.MainWindow = new Window { Title = "StickerForge Studio", Width = 960, Height = 640, Content = new TextBlock { Text = "StickerForge Studio — M0", Margin = new Thickness(32) } };
+            desktop.MainWindow = new MainWindow();
         base.OnFrameworkInitializationCompleted();
     }
 }
