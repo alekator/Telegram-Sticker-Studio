@@ -1,6 +1,6 @@
 # StickerForge Studio
 
-> **Telegram integration in progress:** The isolated Telegram project contains preliminary static-image preparation, a WTelegramClient login wrapper and an API-independent publication coordinator. They are not connected to the desktop application. Protected session storage, the production Telegram API adapter, publication UI and video export remain unimplemented. Do not use this branch for real publication yet. See [integration status](docs/TELEGRAM_INTEGRATION_STATUS.md).
+> **Telegram integration in progress:** The isolated Telegram project contains preliminary static-image preparation, a WTelegramClient login wrapper, an API-independent publication coordinator and an unverified MTProto adapter. They are not connected to the desktop application. Protected session storage, publication UI, recovery and video export remain unimplemented. Do not use this branch for real publication yet. See [integration status](docs/TELEGRAM_INTEGRATION_STATUS.md).
 
 > **Новое направление:** StickerForge предназначен для пакетного импорта готовых медиа и подготовки стикерпаков к публикации в Telegram. Графический редактор в этой ветке отсутствует. Прямая публикация, вход в Telegram и экспорт пока не реализованы; их архитектура описана в [плане публикации](docs/TELEGRAM_PUBLICATION_PLAN.md) и [UX-плане](docs/PACK_WORKFLOW_UX.md).
 >
