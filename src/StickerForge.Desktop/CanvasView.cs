@@ -19,7 +19,7 @@ internal sealed class CanvasView : Control, IDisposable
     private Point last;
     public event Action? Changed;
     public event Action<double>? ZoomChanged;
-    public CanvasView(GraphicsSession editor) { this.editor = editor; ClipToBounds = true; }
+    public CanvasView(GraphicsSession editor) { this.editor = editor; ClipToBounds = true; Focusable = true; }
     public void Refresh() => InvalidateVisual();
     public void Fit()
     {
@@ -50,6 +50,7 @@ internal sealed class CanvasView : Control, IDisposable
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e); var p = e.GetPosition(this); var props = e.GetCurrentPoint(this).Properties;
+        Focus();
         if (props.IsMiddleButtonPressed) { panning = true; last = p; e.Pointer.Capture(this); }
         else if (props.IsLeftButtonPressed)
         {
