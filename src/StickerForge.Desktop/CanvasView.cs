@@ -18,6 +18,7 @@ internal sealed class CanvasView : Control, IDisposable
     private bool drawing, panning;
     private Point last;
     public event Action? Changed;
+    public event Action<double>? ZoomChanged;
     public CanvasView(GraphicsSession editor) { this.editor = editor; ClipToBounds = true; }
     public void Refresh() => InvalidateVisual();
     public void Fit()
@@ -25,6 +26,7 @@ internal sealed class CanvasView : Control, IDisposable
         var doc = editor.Session.Document;
         var scale = Math.Clamp(Math.Min((Bounds.Width - 40) / doc.Width, (Bounds.Height - 40) / doc.Height), .1, 8);
         view = new(scale, (Bounds.Width - doc.Width * scale) / 2, (Bounds.Height - doc.Height * scale) / 2);
+        ZoomChanged?.Invoke(scale);
         InvalidateVisual();
     }
     public override void Render(DrawingContext context)
@@ -78,9 +80,14 @@ internal sealed class CanvasView : Control, IDisposable
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e); if (drawing || panning) return;
-        var p = e.GetPosition(this); view = view.ZoomAt(e.Delta.Y > 0 ? 1.2 : 1 / 1.2, p.X, p.Y); InvalidateVisual(); e.Handled = true;
+        var p = e.GetPosition(this); view = view.ZoomAt(e.Delta.Y > 0 ? 1.2 : 1 / 1.2, p.X, p.Y); ZoomChanged?.Invoke(view.Scale); InvalidateVisual(); e.Handled = true;
     }
-    public void Dispose() => renderer.Dispose();
+    public void FinishInteraction()
+    {
+        if (drawing) { editor.End(); drawing = false; Changed?.Invoke(); }
+        panning = false;
+    }
+    public void Dispose() { drawing = false; panning = false; renderer.Dispose(); }
 
     private sealed class DrawOperation(Rect bounds, ImageDocument snapshot, ViewTransform view, DirectRenderer renderer) : ICustomDrawOperation
     {
