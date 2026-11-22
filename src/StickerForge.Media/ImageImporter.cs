@@ -3,7 +3,7 @@ using StickerForge.Core;
 
 namespace StickerForge.Media;
 
-public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail, int[]? FrameDurations = null);
+public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail, int[]? FrameDurations = null, VideoMetadata? Video = null);
 public sealed record ImportResult(string Path, StickerItem? Item, ImageInfo? Info, string? Error);
 public interface IImageDecoder
 {
@@ -41,8 +41,9 @@ public sealed class SkiaImageDecoder : IImageDecoder
     }
 }
 
-public sealed class ImageImporter(IImageDecoder decoder)
+public sealed class ImageImporter(IImageDecoder decoder, FfmpegService? ffmpeg = null)
 {
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase) { ".mp4", ".mov", ".mkv", ".webm", ".avi" };
     public async Task<IReadOnlyList<ImportResult>> ImportAsync(IEnumerable<string> paths, IProgress<(int Done, int Total)>? progress = null, CancellationToken cancellationToken = default)
     {
         var files = paths.ToArray();
@@ -53,10 +54,21 @@ public sealed class ImageImporter(IImageDecoder decoder)
             var path = files[i];
             try
             {
-                var info = await Task.Run(() => decoder.Decode(path, cancellationToken), cancellationToken);
+                ImageInfo info;
+                if (VideoExtensions.Contains(Path.GetExtension(path)))
+                {
+                    if (ffmpeg is null) throw new InvalidDataException("FFmpeg and FFprobe are unavailable; configure them to import video.");
+                    var availability = await ffmpeg.CheckAsync(cancellationToken);
+                    if (!availability.Available) throw new InvalidDataException("FFmpeg and FFprobe are unavailable; install or configure them to import video. " + availability.Message);
+                    var metadata = await ffmpeg.ProbeAsync(path, cancellationToken);
+                    var frame = await ffmpeg.ReadFrameAsync(path, 0, cancellationToken);
+                    if (frame.Length == 0) throw new InvalidDataException("No video frame could be decoded.");
+                    info = new ImageInfo("Video", metadata.Width, metadata.Height, metadata.FileSize, frame, Video: metadata);
+                }
+                else info = await Task.Run(() => decoder.Decode(path, cancellationToken), cancellationToken);
                 results.Add(new ImportResult(path, new StickerItem { SourcePath = Path.GetFullPath(path) }, info, null));
             }
-            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Text.Json.JsonException or KeyNotFoundException)
             {
                 results.Add(new ImportResult(path, null, null, e.Message));
             }

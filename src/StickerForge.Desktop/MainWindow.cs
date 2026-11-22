@@ -15,7 +15,7 @@ namespace StickerForge.Desktop;
 public sealed class MainWindow : Window
 {
     private readonly ProjectStore store = new();
-    private readonly ImageImporter importer = new(new SkiaImageDecoder());
+    private readonly ImageImporter importer = new(new SkiaImageDecoder(), FfmpegLocator.CreateDefault());
     private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TextBox packName = new() { PlaceholderText = "Pack name", Width = 220 };
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
@@ -276,7 +276,7 @@ public sealed class MainWindow : Window
                 if (result.Info is null) { details.Text = result.Error; return; }
                 info = result.Info; cache[item.Id] = info;
             }
-            var bytes = info.FrameDurations is not null
+            var bytes = info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, 0))
                 : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (generation != previewGeneration) return;
@@ -284,6 +284,8 @@ public sealed class MainWindow : Window
             var bitmap = new Bitmap(stream);
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{info.Format} · {info.Width} × {info.Height}\n{info.FileSize:N0} bytes";
+            if (info.Video is { } video)
+                details.Text += $"\n{video.Codec} · {video.FramesPerSecond?.ToString("0.##") ?? "unknown"} fps\n{video.DurationSeconds:0.00} s · alpha: {(video.HasAlpha == true ? "present" : "unknown")}\nStill frame only — video playback is not available yet.";
             if (info.FrameDurations is { Length: > 1 } durations)
             {
                 gifPath = item.SourcePath; gifDurations = durations; gifFrame = 0;

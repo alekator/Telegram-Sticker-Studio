@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace StickerForge.Media;
 
-public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec);
+public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec, double? FramesPerSecond = null, bool? HasAlpha = null, long FileSize = 0);
 public sealed record FfmpegAvailability(bool Available, string Message);
 
 /// <summary>Runs a caller-supplied FFmpeg installation without invoking a shell.</summary>
@@ -41,8 +41,9 @@ public sealed class FfmpegService
 
     public async Task<VideoMetadata> ProbeAsync(string path, CancellationToken cancellationToken = default)
     {
-        var output = await RunAsync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries",
-            "stream=width,height,codec_name:format=duration", "-of", "json", Path.GetFullPath(path)], 1024 * 1024, cancellationToken);
+        path = Path.GetFullPath(path);
+        var output = await RunAsync(ffprobe, ["-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries",
+            "stream=width,height,codec_name,avg_frame_rate,pix_fmt:stream_tags=alpha_mode:format=duration", "-of", "json", path], 1024 * 1024, cancellationToken);
         using var doc = JsonDocument.Parse(output);
         var root = doc.RootElement;
         if (!root.TryGetProperty("streams", out var streams) || streams.GetArrayLength() == 0)
@@ -55,13 +56,27 @@ public sealed class FfmpegService
         var durationText = root.GetProperty("format").GetProperty("duration").GetString();
         if (!double.TryParse(durationText, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) || !double.IsFinite(duration) || duration <= 0)
             throw new InvalidDataException("Video duration is unavailable.");
-        return new(width, height, duration, stream.GetProperty("codec_name").GetString() ?? "unknown");
+        double? fps = null;
+        if (stream.TryGetProperty("avg_frame_rate", out var rate))
+        {
+            var parts = (rate.GetString() ?? "").Split('/');
+            if (parts.Length == 2 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var n) &&
+                double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && d > 0 && n > 0 && double.IsFinite(n / d))
+                fps = n / d;
+        }
+        bool? alpha = null;
+        if (stream.TryGetProperty("tags", out var tags) && tags.TryGetProperty("alpha_mode", out var mode) && mode.GetString() == "1")
+            alpha = true;
+        var pixFmt = stream.TryGetProperty("pix_fmt", out var pix) ? pix.GetString() : null;
+        if (pixFmt is not null && (pixFmt.StartsWith("yuva", StringComparison.Ordinal) || pixFmt is "rgba" or "bgra" or "argb" or "abgr" or "gbrap" or "ya8" or "ya16le"))
+            alpha = true;
+        return new(width, height, duration, stream.GetProperty("codec_name").GetString() ?? "unknown", fps, alpha, new FileInfo(path).Length);
     }
 
     public Task<byte[]> ReadFrameAsync(string path, double seconds, CancellationToken cancellationToken = default)
     {
         if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentOutOfRangeException(nameof(seconds));
-        return RunAsync(ffmpeg, ["-v", "error", "-ss", seconds.ToString("R", CultureInfo.InvariantCulture),
+        return RunAsync(ffmpeg, ["-v", "error", "-protocol_whitelist", "file,pipe", "-ss", seconds.ToString("R", CultureInfo.InvariantCulture),
             "-i", Path.GetFullPath(path), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], 32 * 1024 * 1024, cancellationToken);
     }
 
