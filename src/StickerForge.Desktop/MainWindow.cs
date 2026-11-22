@@ -9,7 +9,6 @@ using Avalonia.Platform.Storage;
 using StickerForge.Core;
 using StickerForge.Infrastructure;
 using StickerForge.Media;
-using StickerForge.Rendering;
 using Avalonia.Controls.Primitives;
 using Avalonia.Platform;
 using System.Diagnostics;
@@ -30,17 +29,11 @@ public sealed class MainWindow : Window
     private readonly TextBlock status = new() { Text = "Ready" };
     private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1, Width = 150, Height = 8 };
     private readonly Dictionary<Guid, ImageInfo> cache = [];
-    private readonly Dictionary<Guid, string> editErrors = [];
     private StickerProject project = new();
     private string? projectPath;
     private bool dirty;
     private bool refreshing;
     private bool busy;
-    private bool navigating;
-    private bool closingWindow;
-    private DockPanel galleryView = null!;
-    private EditorWorkspace? editorView;
-    private StickerItem? editingItem;
     private CancellationTokenSource? importing;
     private long previewGeneration;
     private Bitmap? previewBitmap;
@@ -67,16 +60,15 @@ public sealed class MainWindow : Window
         Title = "StickerForge Studio";
         Width = 1280; Height = 760; MinWidth = 820; MinHeight = 520;
         RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
-        var root = new DockPanel { Margin = new Thickness(14) }; galleryView = root;
+        var root = new DockPanel { Margin = new Thickness(14) };
         var top = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
         top.Children.Add(Button("New", async () => await NewAsync(), "Ctrl+N"));
         top.Children.Add(Button("Open", async () => await OpenAsync(), "Ctrl+O"));
-        top.Children.Add(Button("Save project", async () => await SaveAsync(false), "Ctrl+S"));
-        top.Children.Add(Button("Save project as", async () => await SaveAsync(true), "Ctrl+Shift+S"));
+        top.Children.Add(Button("Save", async () => await SaveAsync(false), "Ctrl+S"));
+        top.Children.Add(Button("Save as", async () => await SaveAsync(true), "Ctrl+Shift+S"));
         top.Children.Add(packName);
         top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
         top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
-        top.Children.Add(Button("Edit selected image", EditSelectedAsync));
         top.Children.Add(Button("Cancel import", () => { importing?.Cancel(); return Task.CompletedTask; }));
         DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
@@ -145,7 +137,7 @@ public sealed class MainWindow : Window
         };
         KeyDown += OnKeyDown;
         Closing += OnClosing;
-        Closed += (_, _) => { StopGif(); StopVideo(); editorView?.Dispose(); };
+        Closed += (_, _) => { StopGif(); StopVideo(); };
         RefreshGallery();
     }
 
@@ -173,22 +165,15 @@ public sealed class MainWindow : Window
     }
     private async void OnClosing(object? sender, WindowClosingEventArgs e)
     {
-        if (!dirty && !busy && editorView is null) return;
+        if (!dirty && !busy) return;
         e.Cancel = true;
-        if (busy) { status.Text = "Wait for the current operation or cancel the import before closing."; editorView?.SetStatus(status.Text); return; }
-        if (closingWindow) return;
-        closingWindow = true;
-        try
-        {
-            if (!await LeaveEditorAsync()) return;
-            if (await ConfirmDiscardAsync()) { dirty = false; Close(); }
-        }
-        finally { closingWindow = false; }
+        if (busy) { status.Text = "Cancel the import before closing."; return; }
+        if (await ConfirmDiscardAsync()) { dirty = false; Close(); }
     }
     private async Task NewAsync()
     {
         if (busy || !await ConfirmDiscardAsync()) return;
-        project = new(); projectPath = null; dirty = false; cache.Clear(); editErrors.Clear(); RefreshGallery();
+        project = new(); projectPath = null; dirty = false; cache.Clear(); RefreshGallery();
     }
     private async Task OpenAsync()
     {
@@ -199,12 +184,9 @@ public sealed class MainWindow : Window
         if (path is null) return;
         try
         {
-            project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); editErrors.Clear(); RefreshGallery();
+            project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); RefreshGallery();
             await LoadThumbnailsAsync();
-            var missing = project.Stickers.Count(x => !File.Exists(x.SourcePath));
-            status.Text = missing > 0 || editErrors.Count > 0
-                ? $"Project opened: {missing} missing source(s), {editErrors.Count} damaged editing document(s). Select a sticker for details."
-                : "Project opened";
+            status.Text = "Project opened";
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
         { status.Text = $"Open failed: {ex.Message}"; }
@@ -218,16 +200,7 @@ public sealed class MainWindow : Window
             {
                 if (!File.Exists(item.SourcePath)) continue;
                 var result = (await importer.ImportAsync([item.SourcePath]))[0];
-                if (result.Info is not null)
-                {
-                    var info = result.Info;
-                    if (item.EditableDocument is not null && info.Video is null && info.FrameDurations is null)
-                    {
-                        try { using var editor = GraphicsSession.Open(item.SourcePath, item.EditableDocument); info = info with { Thumbnail = editor.Thumbnail() }; }
-                        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or InvalidOperationException) { editErrors[item.Id] = ex.Message; }
-                    }
-                    cache[item.Id] = info;
-                }
+                if (result.Info is not null) cache[item.Id] = result.Info;
             }
         }
         finally { busy = false; RefreshGallery(); }
@@ -235,10 +208,6 @@ public sealed class MainWindow : Window
     private async Task<bool> SaveAsync(bool saveAs)
     {
         if (busy) return false;
-        busy = true;
-        if (editorView is not null) editorView.IsEnabled = false;
-        try
-        {
         var path = saveAs ? null : projectPath;
         if (path is null)
         {
@@ -248,10 +217,8 @@ public sealed class MainWindow : Window
         }
         if (path is null) return false;
         try { await store.SaveAsync(project, path); projectPath = path; dirty = false; UpdateTitle(); status.Text = "Project saved"; return true; }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
-        { status.Text = $"Project save failed: {ex.Message}. Your applied edits remain in the open project."; return false; }
-        }
-        finally { busy = false; if (editorView is not null) editorView.IsEnabled = true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { status.Text = $"Save failed: {ex.Message}"; return false; }
     }
     private async Task PickFilesAsync()
     {
@@ -331,7 +298,7 @@ public sealed class MainWindow : Window
         {
             var name = Path.GetFileName(item.SourcePath);
             var exists = File.Exists(item.SourcePath);
-            var text = !exists ? $"{name} — missing source" : editErrors.ContainsKey(item.Id) ? $"{name} — damaged edit" : name;
+            var text = exists ? name : $"{name} — missing";
             Bitmap? thumbnail = null;
             if (cache.TryGetValue(item.Id, out var info))
             {
@@ -402,8 +369,6 @@ public sealed class MainWindow : Window
         var generation = ++previewGeneration;
         if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
         var item = entry.Item;
-        if (!File.Exists(item.SourcePath)) { preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null; details.Text = $"Source file is missing: {item.SourcePath}. Restore the original file to edit this sticker."; return; }
-        if (editErrors.TryGetValue(item.Id, out var editError)) { preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null; details.Text = $"Cannot display edited sticker: {editError}"; return; }
         details.Text = $"Loading {Path.GetFileName(item.SourcePath)}…";
         try
         {
@@ -414,9 +379,7 @@ public sealed class MainWindow : Window
                 if (result.Info is null) { details.Text = result.Error; return; }
                 info = result.Info; cache[item.Id] = info;
             }
-            var bytes = item.EditableDocument is not null && info.Video is null && info.FrameDurations is null
-                ? await Task.Run(() => { using var edit = GraphicsSession.Open(item.SourcePath, item.EditableDocument); return edit.RenderPng(); })
-                : info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
+            var bytes = info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, 0))
                 : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (generation != previewGeneration) return;
@@ -559,88 +522,8 @@ public sealed class MainWindow : Window
         if (busy) return Task.CompletedTask;
         var selected = gallery.SelectedItems?.OfType<ListBoxItem>().Select(x => ((GalleryEntry)x.Tag!).Item).ToArray() ?? [];
         if (selected.Length == 0) return Task.CompletedTask;
-        foreach (var item in selected) { project.Stickers.Remove(item); cache.Remove(item.Id); editErrors.Remove(item.Id); }
+        foreach (var item in selected) { project.Stickers.Remove(item); cache.Remove(item.Id); }
         MarkDirty(); RefreshGallery(); return Task.CompletedTask;
-    }
-    private async Task EditSelectedAsync()
-    {
-        if (busy || navigating || editorView is not null || gallery.SelectedItems?.Count != 1 || gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) { status.Text = "Select one static image to edit."; return; }
-        var item = entry.Item;
-        if (!File.Exists(item.SourcePath)) { status.Text = $"Source file is missing: {item.SourcePath}. Restore it before editing."; return; }
-        if (editErrors.TryGetValue(item.Id, out var editError)) { status.Text = $"Cannot open editor: {editError}"; return; }
-        if (!cache.TryGetValue(item.Id, out var info) || info.Video is not null || info.FrameDurations is not null)
-        { status.Text = "Editing is currently available only for imported static images."; return; }
-        try
-        {
-            busy = true; galleryView.IsEnabled = false;
-            var session = await Task.Run(() => GraphicsSession.Open(item.SourcePath, item.EditableDocument));
-            var state = new WorkspaceEditSession(session, (document, thumbnail) =>
-            {
-                item.EditableDocument = document;
-                cache[item.Id] = info with { Thumbnail = thumbnail };
-                MarkDirty();
-            });
-            try
-            {
-                var view = new EditorWorkspace(state, project.Name);
-                view.BackRequested += async () => await LeaveEditorAsync();
-                view.SaveRequested += async asNew => await SaveFromEditorAsync(asNew);
-                ClearVideo(); StopGif();
-                editingItem = item; editorView = view; Content = view; view.FitWhenShown();
-            }
-            catch { state.Dispose(); throw; }
-        }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
-        { status.Text = $"Cannot open editor: {ex.Message}"; }
-        finally { busy = false; galleryView.IsEnabled = true; }
-    }
-
-    private async Task SaveFromEditorAsync(bool saveAs)
-    {
-        var view = editorView;
-        if (view is null || busy || navigating) return;
-        try { view.FinishInteraction(); }
-        catch (Exception ex) { view.SetStatus($"Could not finish the current stroke: {ex.Message}"); return; }
-        var saved = await SaveAsync(saveAs);
-        if (ReferenceEquals(editorView, view)) view.SetStatus(saved && view.State.HasUnappliedChanges
-            ? "Project saved; editor changes are not applied. Apply to project to include them."
-            : status.Text ?? "");
-    }
-
-    private async Task<bool> LeaveEditorAsync()
-    {
-        var view = editorView;
-        if (view is null) return true;
-        if (busy || navigating) return false;
-        navigating = true;
-        try
-        {
-            view.FinishInteraction();
-            var choice = LeaveEditorChoice.Discard;
-            if (view.State.HasUnappliedChanges)
-            {
-                var dialog = new Window { Title = "Unapplied editor changes", Width = 540, Height = 210, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-                var panel = new StackPanel { Margin = new Thickness(20), Spacing = 16 };
-                panel.Children.Add(new TextBlock { Text = "Apply these edits to the project? Save the project to write them to disk.", TextWrapping = TextWrapping.Wrap });
-                var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
-                AddChoice("Apply changes", LeaveEditorChoice.Apply); AddChoice("Discard changes", LeaveEditorChoice.Discard); AddChoice("Continue editing", LeaveEditorChoice.Continue);
-                panel.Children.Add(buttons); dialog.Content = panel;
-                choice = await dialog.ShowDialog<LeaveEditorChoice>(this);
-                void AddChoice(string label, LeaveEditorChoice result)
-                {
-                    var button = new Button { Content = label, Margin = new Thickness(0, 0, 8, 4) };
-                    button.Click += (_, _) => dialog.Close(result); buttons.Children.Add(button);
-                }
-            }
-            if (!view.State.PrepareLeave(choice)) return false;
-            Content = galleryView; editorView = null; view.Dispose();
-            var item = editingItem; editingItem = null; RefreshGallery();
-            var index = item is null ? -1 : project.Stickers.IndexOf(item);
-            if (index >= 0) gallery.SelectedIndex = index;
-            return true;
-        }
-        catch (Exception ex) { view.SetStatus($"Could not leave editor: {ex.Message}. Your edits remain open."); return false; }
-        finally { navigating = false; }
     }
     private Task MoveSelected(int delta)
     {
@@ -655,11 +538,6 @@ public sealed class MainWindow : Window
     {
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
-            if (editorView is not null)
-            {
-                if (e.Key == Key.S) { await SaveFromEditorAsync(e.KeyModifiers.HasFlag(KeyModifiers.Shift)); e.Handled = true; }
-                return;
-            }
             if (e.Key == Key.N) await NewAsync();
             else if (e.Key == Key.O) await OpenAsync();
             else if (e.Key == Key.S) await SaveAsync(e.KeyModifiers.HasFlag(KeyModifiers.Shift));

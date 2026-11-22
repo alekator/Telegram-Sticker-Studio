@@ -12,7 +12,6 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
-    <PackageReference Include="Avalonia.Headless" Version="12.1.6" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,8 +21,6 @@
     <ProjectReference Include="../../src/StickerForge.Core/StickerForge.Core.csproj" />
     <ProjectReference Include="../../src/StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
     <ProjectReference Include="../../src/StickerForge.Media/StickerForge.Media.csproj" />
-    <ProjectReference Include="../../src/StickerForge.Rendering/StickerForge.Rendering.csproj" />
-    <ProjectReference Include="../../src/StickerForge.Desktop/StickerForge.Desktop.csproj" />
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
   </ItemGroup>
 
