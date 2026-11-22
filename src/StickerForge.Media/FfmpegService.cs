@@ -1,0 +1,112 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
+
+namespace StickerForge.Media;
+
+public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec);
+public sealed record FfmpegAvailability(bool Available, string Message);
+
+/// <summary>Runs a caller-supplied FFmpeg installation without invoking a shell.</summary>
+public sealed class FfmpegService
+{
+    private static readonly SemaphoreSlim Processes = new(2, 2);
+    private readonly string ffmpeg;
+    private readonly string ffprobe;
+
+    public FfmpegService(string ffmpeg = "ffmpeg", string ffprobe = "ffprobe")
+    {
+        this.ffmpeg = ffmpeg;
+        this.ffprobe = ffprobe;
+    }
+
+    public async Task<FfmpegAvailability> CheckAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var encoder = await RunAsync(ffmpeg, ["-version"], 1024 * 1024, cancellationToken);
+            var probe = await RunAsync(ffprobe, ["-version"], 1024 * 1024, cancellationToken);
+            var encText = System.Text.Encoding.UTF8.GetString(encoder);
+            var probeText = System.Text.Encoding.UTF8.GetString(probe);
+            if (!encText.StartsWith("ffmpeg version ", StringComparison.OrdinalIgnoreCase) ||
+                !probeText.StartsWith("ffprobe version ", StringComparison.OrdinalIgnoreCase))
+                return new(false, "The configured executables did not identify themselves as FFmpeg and FFprobe.");
+            return new(true, encText.Split('\n')[0].Trim());
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return new(false, $"FFmpeg/FFprobe unavailable: {ex.Message}");
+        }
+    }
+
+    public async Task<VideoMetadata> ProbeAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var output = await RunAsync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries",
+            "stream=width,height,codec_name:format=duration", "-of", "json", Path.GetFullPath(path)], 1024 * 1024, cancellationToken);
+        using var doc = JsonDocument.Parse(output);
+        var root = doc.RootElement;
+        if (!root.TryGetProperty("streams", out var streams) || streams.GetArrayLength() == 0)
+            throw new InvalidDataException("No video stream found.");
+        var stream = streams[0];
+        var width = stream.GetProperty("width").GetInt32();
+        var height = stream.GetProperty("height").GetInt32();
+        if (width <= 0 || height <= 0 || (long)width * height > 40_000_000)
+            throw new InvalidDataException("Video dimensions exceed the limit.");
+        var durationText = root.GetProperty("format").GetProperty("duration").GetString();
+        if (!double.TryParse(durationText, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) || !double.IsFinite(duration) || duration <= 0)
+            throw new InvalidDataException("Video duration is unavailable.");
+        return new(width, height, duration, stream.GetProperty("codec_name").GetString() ?? "unknown");
+    }
+
+    public Task<byte[]> ReadFrameAsync(string path, double seconds, CancellationToken cancellationToken = default)
+    {
+        if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentOutOfRangeException(nameof(seconds));
+        return RunAsync(ffmpeg, ["-v", "error", "-ss", seconds.ToString("R", CultureInfo.InvariantCulture),
+            "-i", Path.GetFullPath(path), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], 32 * 1024 * 1024, cancellationToken);
+    }
+
+    private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken)
+    {
+        await Processes.WaitAsync(cancellationToken);
+        try
+        {
+            var start = new ProcessStartInfo(executable) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            foreach (var argument in arguments) start.ArgumentList.Add(argument);
+            using var process = Process.Start(start) ?? throw new IOException("Could not start media process.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            using var registration = timeout.Token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } });
+            var stderr = DrainErrorsAsync(process.StandardError, timeout.Token);
+            using var output = new MemoryStream();
+            var buffer = new byte[16384];
+            try
+            {
+                int count;
+                while ((count = await process.StandardOutput.BaseStream.ReadAsync(buffer, timeout.Token)) != 0)
+                {
+                    if (output.Length + count > maxBytes) throw new InvalidDataException("Media process output exceeds the limit.");
+                    await output.WriteAsync(buffer.AsMemory(0, count), timeout.Token);
+                }
+                await process.WaitForExitAsync(timeout.Token);
+                var errors = await stderr;
+                if (process.ExitCode != 0) throw new InvalidDataException($"Media process failed: {errors.Trim()}");
+                return output.ToArray();
+            }
+            finally { if (!process.HasExited) process.Kill(true); }
+        }
+        finally { Processes.Release(); }
+    }
+
+    private static async Task<string> DrainErrorsAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var result = new System.Text.StringBuilder();
+        var buffer = new char[4096];
+        int count;
+        while ((count = await reader.ReadAsync(buffer, cancellationToken)) != 0)
+        {
+            var remaining = 16384 - result.Length;
+            if (remaining > 0) result.Append(buffer, 0, Math.Min(count, remaining));
+        }
+        return result.ToString();
+    }
+}

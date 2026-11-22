@@ -169,8 +169,26 @@ public sealed class MainWindow : Window
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Import folder", AllowMultiple = false });
         var path = folders.FirstOrDefault()?.TryGetLocalPath();
         if (path is null) return;
-        try { await ImportAsync(await Task.Run(() => Directory.GetFiles(path))); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { status.Text = $"Folder error: {ex.Message}"; }
+        FolderScanResult scan;
+        busy = true;
+        importing = new CancellationTokenSource();
+        try
+        {
+            var token = importing.Token;
+            var report = new Progress<int>(count => status.Text = $"Scanning folder: {count} files");
+            scan = await Task.Run(() => new FolderScanner().Scan(path, report, token), token);
+        }
+        catch (OperationCanceledException) { status.Text = "Folder scan cancelled."; return; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        { status.Text = $"Folder error: {ex.Message}"; return; }
+        finally { importing.Dispose(); importing = null; busy = false; }
+        await ImportAsync(scan.Files);
+        if (scan.Errors.Count > 0)
+        {
+            var dialog = new Window { Title = "Folder scan errors", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, scan.Errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
+            await dialog.ShowDialog(this);
+        }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
     {
