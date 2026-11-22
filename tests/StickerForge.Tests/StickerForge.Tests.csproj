@@ -17,5 +17,11 @@
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/StickerForge.Core/StickerForge.Core.csproj" />
+    <ProjectReference Include="../../src/StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/StickerForge.Media/StickerForge.Media.csproj" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
+  </ItemGroup>
 
 </Project>
