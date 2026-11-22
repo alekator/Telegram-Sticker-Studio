@@ -11,6 +11,7 @@ public sealed class TelegramLogin : IDisposable
     {
         if (apiId <= 0 || string.IsNullOrWhiteSpace(apiHash) || string.IsNullOrWhiteSpace(sessionPath) || string.IsNullOrWhiteSpace(sessionKey))
             throw new ArgumentException("API credentials, session path and an independently protected session key are required.");
+        Helpers.Log = (_, _) => { }; // Do not emit potentially sensitive library diagnostics.
         client = new Client(what => what switch
         {
             "api_id" => apiId.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -19,6 +20,7 @@ public sealed class TelegramLogin : IDisposable
             "session_key" => sessionKey,
             _ => null!
         });
+        client.FloodRetryThreshold = 0;
     }
     /// <summary>First supply a phone number; subsequent calls supply the requested code or 2FA password.</summary>
     public Task<string?> ContinueAsync(string input) => client.Login(input);

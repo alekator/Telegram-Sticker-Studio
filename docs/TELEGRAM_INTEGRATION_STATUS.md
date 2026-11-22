@@ -1,5 +1,7 @@
 # Telegram integration: work in progress
 
+> **Update:** The notes below describe the earlier prototype and are retained for history. An experimental Avalonia publishing window, password-encrypted vault, WebP output and a durable creation reservation now exist. The full flow and security have not been verified with Telegram; do not use production credentials or merge yet. See [current status and manual acceptance plan](TELEGRAM_MANUAL_TEST.md).
+
 The current branch is not a functional Telegram publisher and is not ready for a real-account test.
 
 Implemented building blocks:

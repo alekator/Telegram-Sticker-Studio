@@ -17,6 +17,7 @@ public sealed class StaticStickerPreparerTests
             using var image = SKImage.FromBitmap(bitmap); using var encoded = image.Encode(format, 100);
             var source = encoded.ToArray(); await File.WriteAllBytesAsync(path, source);
             var result = await new StaticStickerPreparer().PrepareAsync(path);
+            using var codec = SKCodec.Create(new SKMemoryStream(result)); Assert.Equal(SKEncodedImageFormat.Webp, codec.EncodedFormat);
             using var output = SKBitmap.Decode(result);
             Assert.Equal(512, output.Width); Assert.Equal(256, output.Height);
             Assert.Equal(0, output.GetPixel(0, 0).Alpha);

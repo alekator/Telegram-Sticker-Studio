@@ -69,6 +69,7 @@ public sealed class MainWindow : Window
         top.Children.Add(packName);
         top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
         top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
+        top.Children.Add(Button("Publish to Telegram", async () => { var window = new TelegramPublishWindow(project.Stickers.Select(s => s.SourcePath).ToArray(), project.Name); await window.ShowDialog(this); }));
         top.Children.Add(Button("Cancel import", () => { importing?.Cancel(); return Task.CompletedTask; }));
         DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };

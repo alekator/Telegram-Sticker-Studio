@@ -19,15 +19,15 @@ public sealed class WTelegramStickerApi(TelegramLogin login) : ITelegramStickerA
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = new MemoryStream(png, writable: false);
-        var file = await login.Client.UploadFileAsync(stream, "sticker.png");
+        var file = await login.Client.UploadFileAsync(stream, "sticker.webp");
         cancellationToken.ThrowIfCancellationRequested();
         var media = await login.Client.Messages_UploadMedia(new InputPeerSelf(), new InputMediaUploadedDocument
         {
-            file = file, mime_type = "image/png", attributes = [new DocumentAttributeFilename { file_name = "sticker.png" }]
+            file = file, mime_type = "image/webp", attributes = [new DocumentAttributeFilename { file_name = "sticker.webp" }]
         });
         cancellationToken.ThrowIfCancellationRequested();
         if (media is not MessageMediaDocument { document: Document document }) throw new InvalidDataException("Telegram did not return an uploaded document.");
-        var key = Guid.NewGuid().ToString("N");
+        var key = document.id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         documents.Add(key, new InputDocument { id = document.id, access_hash = document.access_hash, file_reference = document.file_reference });
         return key;
     }
@@ -40,11 +40,12 @@ public sealed class WTelegramStickerApi(TelegramLogin login) : ITelegramStickerA
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    public async Task<bool> IsOwnedSetAsync(string shortName, CancellationToken cancellationToken)
+    public async Task<bool> MatchesOwnedSetAsync(string shortName, IReadOnlyList<string> documentIds, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var result = await login.Client.Messages_GetStickerSet(new InputStickerSetShortName { short_name = shortName }, 0);
         cancellationToken.ThrowIfCancellationRequested();
-        return result is Messages_StickerSet set && set.set.flags.HasFlag(StickerSet.Flags.creator);
+        return result is Messages_StickerSet set && set.set.flags.HasFlag(StickerSet.Flags.creator) &&
+            set.documents.OfType<Document>().Select(d => d.id.ToString(System.Globalization.CultureInfo.InvariantCulture)).Order().SequenceEqual(documentIds.Order());
     }
 }

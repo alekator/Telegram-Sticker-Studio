@@ -2,7 +2,7 @@ using SkiaSharp;
 
 namespace StickerForge.Telegram;
 
-/// <summary>Produces a separate PNG, leaving the source untouched.</summary>
+/// <summary>Produces a separate WebP, leaving the source untouched.</summary>
 public sealed class StaticStickerPreparer
 {
     public const int MaximumBytes = 512 * 1024;
@@ -30,8 +30,8 @@ public sealed class StaticStickerPreparer
         using var resized = bitmap.Resize(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul), SKSamplingOptions.Default)
             ?? throw new InvalidDataException("Unable to resize the image.");
         using var image = SKImage.FromBitmap(resized);
-        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100) ?? throw new InvalidDataException("Unable to encode PNG.");
-        if (encoded.Size > MaximumBytes) throw new InvalidDataException("The prepared PNG exceeds Telegram's 512 KB limit.");
+        using var encoded = image.Encode(SKEncodedImageFormat.Webp, 100) ?? throw new InvalidDataException("Unable to encode WebP.");
+        if (encoded.Size > MaximumBytes) throw new InvalidDataException("The prepared WebP exceeds Telegram's 512 KB limit.");
         cancellationToken.ThrowIfCancellationRequested();
         return encoded.ToArray();
     }
