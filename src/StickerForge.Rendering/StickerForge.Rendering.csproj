@@ -6,4 +6,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="ImageSpace.Editing" Version="0.3.2-alpha.1" />
+    <PackageReference Include="ImageSpace.Documents" Version="0.3.2-alpha.1" />
+    <PackageReference Include="ImageSpace.Skia" Version="0.3.2-alpha.1" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+  </ItemGroup>
 </Project>
