@@ -9,6 +9,7 @@ using Avalonia.Platform.Storage;
 using StickerForge.Core;
 using StickerForge.Infrastructure;
 using StickerForge.Media;
+using StickerForge.Rendering;
 using Avalonia.Controls.Primitives;
 using Avalonia.Platform;
 using System.Diagnostics;
@@ -69,6 +70,7 @@ public sealed class MainWindow : Window
         top.Children.Add(packName);
         top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
         top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
+        top.Children.Add(Button("Edit selected image", EditSelectedAsync));
         top.Children.Add(Button("Cancel import", () => { importing?.Cancel(); return Task.CompletedTask; }));
         DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
@@ -200,7 +202,16 @@ public sealed class MainWindow : Window
             {
                 if (!File.Exists(item.SourcePath)) continue;
                 var result = (await importer.ImportAsync([item.SourcePath]))[0];
-                if (result.Info is not null) cache[item.Id] = result.Info;
+                if (result.Info is not null)
+                {
+                    var info = result.Info;
+                    if (item.EditableDocument is not null && info.Video is null && info.FrameDurations is null)
+                    {
+                        try { using var editor = GraphicsSession.Open(item.SourcePath, item.EditableDocument); info = info with { Thumbnail = editor.Thumbnail() }; }
+                        catch (Exception ex) when (ex is IOException or ArgumentException or InvalidOperationException) { status.Text = $"Edit preview failed: {ex.Message}"; }
+                    }
+                    cache[item.Id] = info;
+                }
             }
         }
         finally { busy = false; RefreshGallery(); }
@@ -379,7 +390,9 @@ public sealed class MainWindow : Window
                 if (result.Info is null) { details.Text = result.Error; return; }
                 info = result.Info; cache[item.Id] = info;
             }
-            var bytes = info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
+            var bytes = item.EditableDocument is not null && info.Video is null && info.FrameDurations is null
+                ? await Task.Run(() => { using var edit = GraphicsSession.Open(item.SourcePath, item.EditableDocument); return edit.RenderPng(); })
+                : info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, 0))
                 : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (generation != previewGeneration) return;
@@ -524,6 +537,29 @@ public sealed class MainWindow : Window
         if (selected.Length == 0) return Task.CompletedTask;
         foreach (var item in selected) { project.Stickers.Remove(item); cache.Remove(item.Id); }
         MarkDirty(); RefreshGallery(); return Task.CompletedTask;
+    }
+    private async Task EditSelectedAsync()
+    {
+        if (busy || gallery.SelectedItems?.Count != 1 || gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) { status.Text = "Select one static image to edit."; return; }
+        var item = entry.Item;
+        if (!cache.TryGetValue(item.Id, out var info) || info.Video is not null || info.FrameDurations is not null)
+        { status.Text = "Editing is currently available only for imported static images."; return; }
+        try
+        {
+            var session = await Task.Run(() => GraphicsSession.Open(item.SourcePath, item.EditableDocument));
+            var window = new EditorWindow(session, (document, thumbnail) =>
+            {
+                item.EditableDocument = document;
+                cache[item.Id] = info with { Thumbnail = thumbnail };
+                MarkDirty();
+            });
+            await window.ShowDialog(this);
+            RefreshGallery();
+            var index = project.Stickers.IndexOf(item);
+            if (index >= 0) gallery.SelectedIndex = index;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        { status.Text = $"Cannot open editor: {ex.Message}"; }
     }
     private Task MoveSelected(int delta)
     {

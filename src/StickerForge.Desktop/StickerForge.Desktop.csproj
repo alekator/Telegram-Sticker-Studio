@@ -5,5 +5,6 @@
   <ProjectReference Include="../StickerForge.Core/StickerForge.Core.csproj" />
   <ProjectReference Include="../StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
   <ProjectReference Include="../StickerForge.Media/StickerForge.Media.csproj" />
+  <ProjectReference Include="../StickerForge.Rendering/StickerForge.Rendering.csproj" />
 </ItemGroup>
 </Project>
