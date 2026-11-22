@@ -1,0 +1,20 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Themes.Fluent;
+namespace StickerForge.Desktop;
+internal static class Program
+{
+    [STAThread]
+    public static void Main(string[] args) => AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime(args);
+}
+public sealed class App : Application
+{
+    public override void Initialize() => Styles.Add(new FluentTheme());
+    public override void OnFrameworkInitializationCompleted()
+    {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            desktop.MainWindow = new Window { Title = "StickerForge Studio", Width = 960, Height = 640, Content = new TextBlock { Text = "StickerForge Studio — M0", Margin = new Thickness(32) } };
+        base.OnFrameworkInitializationCompleted();
+    }
+}
