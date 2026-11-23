@@ -91,6 +91,7 @@ public sealed class TelegramPublication(ITelegramStickerApi api, PublicationJour
             var observed = await ReadWithFloodWaitAsync(() => api.GetSetAsync(shortName, cancellationToken), progress, cancellationToken);
             if (!observed.Owned || observed.DocumentIds.Distinct().Count() != observed.DocumentIds.Length || observed.DocumentIds.Except(expected).Any() || !observed.DocumentIds.Contains(pending.Value))
                 throw new InvalidOperationException("The previous add is unresolved. Check Telegram manually; it will not be repeated automatically.");
+            journal.MarkAddConfirmed(shortName, pending.Value);
             journal.ClearPendingAdd(shortName);
         }
         foreach (var sticker in record.Stickers)
@@ -100,6 +101,8 @@ public sealed class TelegramPublication(ITelegramStickerApi api, PublicationJour
             if (!set.Owned || set.DocumentIds.Length == 0 || set.DocumentIds.Distinct().Count() != set.DocumentIds.Length || set.DocumentIds.Except(expected).Any())
                 throw new InvalidOperationException("The server set cannot be matched safely; resolve it manually.");
             if (set.DocumentIds.Contains(sticker.Id)) continue;
+            if (journal.WasAddConfirmed(shortName, sticker.Id))
+                throw new InvalidOperationException("A previously confirmed addition is missing. Automatic recovery stopped.");
             // Durable intent prevents a late response causing an automatic duplicate after restart.
             journal.MarkPendingAdd(shortName, sticker.Id);
             try { await api.AddStickerAsync(shortName, sticker, cancellationToken); }
@@ -107,6 +110,7 @@ public sealed class TelegramPublication(ITelegramStickerApi api, PublicationJour
             var afterAdd = await ReadWithFloodWaitAsync(() => api.GetSetAsync(shortName, cancellationToken), progress, cancellationToken);
             if (!afterAdd.Owned || afterAdd.DocumentIds.Distinct().Count() != afterAdd.DocumentIds.Length || afterAdd.DocumentIds.Except(expected).Any() || !afterAdd.DocumentIds.Contains(sticker.Id))
                 throw new PublicationUncertainException(new InvalidOperationException("The addition has not been confirmed."));
+            journal.MarkAddConfirmed(shortName, sticker.Id);
             journal.ClearPendingAdd(shortName);
         }
         var confirmed = await ReadWithFloodWaitAsync(() => api.GetSetAsync(shortName, cancellationToken), progress, cancellationToken);

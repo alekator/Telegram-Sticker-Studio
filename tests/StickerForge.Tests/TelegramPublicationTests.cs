@@ -18,12 +18,13 @@ public sealed class TelegramPublicationTests : IDisposable
         public bool FailUpload;
         public int NameFloods, NameChecks;
         public int WaitSeconds;
+        public int GetCount, FailGetAt;
         public CancellationTokenSource? CancelAfterUpload;
         public Task<bool> IsShortNameAvailableAsync(string name, CancellationToken ct) { NameChecks++; if (NameFloods-- > 0) throw new TelegramFloodWaitException(WaitSeconds); return Task.FromResult(Available); }
         public Task<UploadedSticker> UploadAsync(byte[] png, string emoji, CancellationToken ct) { ct.ThrowIfCancellationRequested(); if (FailUpload) throw new IOException("connection lost"); var doc = new UploadedSticker(++Uploads, 42, System.Text.Encoding.UTF8.GetBytes("secret-reference-for-test"), emoji); CancelAfterUpload?.Cancel(); return Task.FromResult(doc); }
         public Task CreateSetAsync(string title, string name, IReadOnlyList<UploadedSticker> stickers, CancellationToken ct)
         { Creates++; ServerIds = stickers.Select(s => s.Id).ToArray(); if (FailCreate) throw new IOException("connection lost"); return Task.CompletedTask; }
-        public Task<RemoteStickerSet> GetSetAsync(string name, CancellationToken ct) => Task.FromResult(new RemoteStickerSet(Owned, ServerIds));
+        public Task<RemoteStickerSet> GetSetAsync(string name, CancellationToken ct) { GetCount++; if (GetCount == FailGetAt) throw new IOException("connection lost"); return Task.FromResult(new RemoteStickerSet(Owned, ServerIds)); }
         public Task AddStickerAsync(string name, UploadedSticker sticker, CancellationToken ct) { Adds++; if (FailAddBeforeServer) throw new IOException("connection lost"); ServerIds = [.. ServerIds, sticker.Id]; if (FailAdd) throw new IOException("connection lost"); return Task.CompletedTask; }
     }
     private static PreparedSticker[] Stickers() => [new([1, 2, 3], "😀"), new([4, 5], "🎉")];
@@ -165,5 +166,16 @@ public sealed class TelegramPublicationTests : IDisposable
         api.FailAddBeforeServer = false;
         await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
         Assert.Equal(1, api.Adds); Assert.Equal(new long[] { 1 }, api.ServerIds);
+    }
+    [Fact]
+    public async Task ConfirmedAddIsNeverRepeatedIfLaterReadIsStale()
+    {
+        var api = new FakeApi { FailCreate = true };
+        await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
+        api.ServerIds = [1]; api.FailGetAt = 4;
+        await Assert.ThrowsAsync<IOException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        api.ServerIds = [1]; api.FailGetAt = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        Assert.Equal(1, api.Adds);
     }
 }

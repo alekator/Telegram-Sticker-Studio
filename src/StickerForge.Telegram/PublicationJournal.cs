@@ -108,4 +108,12 @@ public sealed class PublicationJournal(string directory, long accountId, string 
         file.Write(bytes); file.Flush(true);
     }
     public void ClearPendingAdd(string name) => File.Delete(PathFor(name) + ".pending");
+    private string AddedPath(string name, long documentId) => PathFor(name) + ".added." + documentId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    public bool WasAddConfirmed(string name, long documentId) => File.Exists(AddedPath(name, documentId));
+    public void MarkAddConfirmed(string name, long documentId)
+    {
+        var path = AddedPath(name, documentId);
+        try { using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.WriteThrough); file.WriteByte(1); file.Flush(true); }
+        catch (IOException) when (File.Exists(path)) { }
+    }
 }
