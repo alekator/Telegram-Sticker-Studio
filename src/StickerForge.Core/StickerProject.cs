@@ -3,7 +3,7 @@ namespace StickerForge.Core;
 public sealed class StickerProject
 {
     public const int CurrentSchemaVersion = 1;
-    public string Name { get; set; } = "Untitled pack";
+    public string Name { get; set; } = "Новый набор";
     public List<StickerItem> Stickers { get; set; } = [];
 }
 

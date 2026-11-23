@@ -6,7 +6,7 @@ using StickerForge.Core;
 
 namespace StickerForge.Media;
 
-public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec, double? FramesPerSecond = null, bool? HasAlpha = null, long FileSize = 0);
+public sealed record VideoMetadata(int Width, int Height, double DurationSeconds, string Codec, double? FramesPerSecond = null, bool? HasAlpha = null, long FileSize = 0, string? Container = null);
 public sealed record FfmpegAvailability(bool Available, string Message);
 public sealed record VideoFrame(int Width, int Height, double Seconds, byte[] Rgba);
 
@@ -46,7 +46,7 @@ public sealed class FfmpegService
     {
         path = Path.GetFullPath(path);
         var output = await RunAsync(ffprobe, ["-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries",
-            "stream=width,height,codec_name,avg_frame_rate,pix_fmt:stream_tags=alpha_mode:format=duration", "-of", "json", path], 1024 * 1024, cancellationToken);
+            "stream=width,height,codec_name,avg_frame_rate,pix_fmt:stream_tags=alpha_mode:format=duration,format_name", "-of", "json", path], 1024 * 1024, cancellationToken);
         using var doc = JsonDocument.Parse(output);
         var root = doc.RootElement;
         if (!root.TryGetProperty("streams", out var streams) || streams.GetArrayLength() == 0)
@@ -73,7 +73,8 @@ public sealed class FfmpegService
         var pixFmt = stream.TryGetProperty("pix_fmt", out var pix) ? pix.GetString() : null;
         if (pixFmt is not null && (pixFmt.StartsWith("yuva", StringComparison.Ordinal) || pixFmt is "rgba" or "bgra" or "argb" or "abgr" or "gbrap" or "ya8" or "ya16le"))
             alpha = true;
-        return new(width, height, duration, stream.GetProperty("codec_name").GetString() ?? "unknown", fps, alpha, new FileInfo(path).Length);
+        var container = format.ValueKind == JsonValueKind.Object && format.TryGetProperty("format_name", out var formatName) ? formatName.GetString() : null;
+        return new(width, height, duration, stream.GetProperty("codec_name").GetString() ?? "unknown", fps, alpha, new FileInfo(path).Length, container);
     }
 
     public Task<byte[]> ReadFrameAsync(string path, double seconds, CancellationToken cancellationToken = default)

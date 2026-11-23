@@ -27,10 +27,13 @@ public sealed class MainWindow : Window
     private readonly FfmpegService ffmpeg = FfmpegLocator.CreateDefault();
     private readonly ImageImporter importer;
     private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
-    private readonly TextBox packName = new() { PlaceholderText = "Pack name", Width = 220 };
+    private readonly TextBox packName = new() { PlaceholderText = "Название набора", Width = 180 };
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
-    private readonly TextBlock details = new() { Text = "Select an image", TextWrapping = TextWrapping.Wrap };
-    private readonly TextBlock status = new() { Text = "Ready" };
+    private readonly TextBlock details = new() { Text = "Выберите стикер", TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock status = new() { Text = "Готово" };
+    private readonly TextBlock selectionCount = new() { Margin = new Thickness(4, 0, 4, 8), Opacity = .8 };
+    private Button? exportButton;
+    private Button? applySelectedButton;
     private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1, Width = 150, Height = 8 };
     private readonly Dictionary<Guid, ImageInfo> cache = [];
     private StickerProject project = new();
@@ -41,12 +44,12 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? importing;
     private long previewGeneration;
     private Bitmap? previewBitmap;
-    private readonly Button gifPlay = new() { Content = "Play", IsVisible = false };
+    private readonly Button gifPlay = new() { Content = "Воспроизвести", IsVisible = false };
     private CancellationTokenSource? gifPlayback;
     private string? gifPath;
     private int[]? gifDurations;
     private int gifFrame;
-    private readonly Button videoPlay = new() { Content = "Play", IsVisible = false };
+    private readonly Button videoPlay = new() { Content = "Воспроизвести", IsVisible = false };
     private readonly Slider videoSeek = new() { Minimum = 0, Maximum = 1, IsVisible = false };
     private readonly TextBlock videoTime = new() { IsVisible = false };
     private CancellationTokenSource? videoPlayback;
@@ -55,8 +58,7 @@ public sealed class MainWindow : Window
     private VideoMetadata? videoMetadata;
     private bool updatingSeek;
     private readonly Border dropZone = new() { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
-    private double previewZoom = 1;
-    private readonly TextBlock galleryHint = new() { Text = "Drop files or folders here, or use Import", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 8) };
+    private readonly TextBlock galleryHint = new() { Text = "Перетащите файлы или папки сюда либо нажмите «Добавить файлы»", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 8) };
     private readonly ComboBox fitMode = new() { ItemsSource = new[] { "Вписать целиком", "Заполнить с обрезкой", "Растянуть (искажает пропорции)" }, SelectedIndex = 0 };
     private readonly Slider scale = new() { Minimum = .1, Maximum = 3, Value = 1 };
     private readonly Slider offsetX = new() { Minimum = -512, Maximum = 512 };
@@ -85,30 +87,31 @@ public sealed class MainWindow : Window
         Background = new SolidColorBrush(Color.Parse("#111621"));
         var root = new DockPanel { Margin = new Thickness(16) };
         var top = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-        top.Children.Add(Button("New", async () => await NewAsync(), "Ctrl+N"));
-        top.Children.Add(Button("Open", async () => await OpenAsync(), "Ctrl+O"));
-        top.Children.Add(Button("Save", async () => await SaveAsync(false), "Ctrl+S"));
-        top.Children.Add(Button("Save as", async () => await SaveAsync(true), "Ctrl+Shift+S"));
+        top.Children.Add(Button("Новый", async () => await NewAsync(), "Ctrl+N"));
+        top.Children.Add(Button("Открыть", async () => await OpenAsync(), "Ctrl+O"));
+        top.Children.Add(Button("Сохранить", async () => await SaveAsync(false), "Ctrl+S"));
+        top.Children.Add(Button("Сохранить как", async () => await SaveAsync(true), "Ctrl+Shift+S"));
         top.Children.Add(packName);
-        top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
-        top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
-        var exportButton = Button("Export stickers", ExportAsync);
+        top.Children.Add(Button("Добавить файлы", async () => await PickFilesAsync(), "Ctrl+I"));
+        top.Children.Add(Button("Добавить папку", async () => await PickFolderAsync()));
+        exportButton = Button("Экспортировать стикеры", ExportAsync);
         exportButton.Background = new SolidColorBrush(Color.Parse("#7658DF")); exportButton.Foreground = Brushes.White;
         top.Children.Add(exportButton);
-        top.Children.Add(Button("Cancel operation", () => { importing?.Cancel(); return Task.CompletedTask; }));
+        top.Children.Add(Button("Отменить операцию", () => { importing?.Cancel(); return Task.CompletedTask; }));
         DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
         bottom.Children.Add(status); bottom.Children.Add(progress);
         DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
         var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,4*,2.5*"), ColumnSpacing = 12 };
         var left = new DockPanel();
-        var galleryTitle = new TextBlock { Text = "YOUR STICKERS", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
+        var galleryTitle = new TextBlock { Text = "СТИКЕРЫ", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
         DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
         var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-        actions.Children.Add(Button("Remove", RemoveSelected));
+        actions.Children.Add(Button("Удалить", RemoveSelected));
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
         DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
-        gallery.SelectionChanged += async (_, _) => await SelectAsync();
+        DockPanel.SetDock(selectionCount, Dock.Top); left.Children.Add(selectionCount);
+        gallery.SelectionChanged += async (_, _) => { if (!refreshing) { UpdateSelection(); await SelectAsync(); } };
         gallery.AddHandler(InputElement.PointerPressedEvent, OnGalleryPointerPressed, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerMovedEvent, StartGalleryDrag, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerReleasedEvent, (_, _) => { dragPress = null; pressedSelection = null; }, RoutingStrategies.Tunnel, true);
@@ -120,11 +123,11 @@ public sealed class MainWindow : Window
         gallery.ItemsPanel = new FuncTemplate<Panel?>(() => new WrapPanel());
         ScrollViewer.SetHorizontalScrollBarVisibility(gallery, ScrollBarVisibility.Disabled);
         var menu = new ContextMenu();
-        var remove = new MenuItem { Header = "Remove selected" };
+        var remove = new MenuItem { Header = "Удалить выделенные" };
         remove.Click += async (_, _) => await RemoveSelected();
-        var earlier = new MenuItem { Header = "Move earlier" };
+        var earlier = new MenuItem { Header = "Переместить выше" };
         earlier.Click += async (_, _) => await MoveSelected(-1);
-        var later = new MenuItem { Header = "Move later" };
+        var later = new MenuItem { Header = "Переместить ниже" };
         later.Click += async (_, _) => await MoveSelected(1);
         menu.Items.Add(remove); menu.Items.Add(earlier); menu.Items.Add(later);
         gallery.ContextMenu = menu;
@@ -150,13 +153,12 @@ public sealed class MainWindow : Window
         {
             if (previewDragStart is not { } start || !e.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
             var point = e.GetPosition(canvas); var size = Math.Min(Math.Max(0, canvas.Bounds.Width - 40), Math.Max(0, canvas.Bounds.Height - 40));
-            if (viewbox.Stretch == Stretch.None) size = Math.Min(size, 512);
+            if (!double.IsNaN(viewbox.Width)) size = Math.Min(size, viewbox.Width);
             if (size <= 0) return;
             offsetX.Value = Math.Clamp(previewStartX + (point.X - start.X) * 512 / size, offsetX.Minimum, offsetX.Maximum);
             offsetY.Value = Math.Clamp(previewStartY + (point.Y - start.Y) * 512 / size, offsetY.Minimum, offsetY.Maximum);
         };
         canvas.PointerReleased += (_, e) => { previewDragStart = null; e.Pointer.Capture(null); };
-        canvas.PointerWheelChanged += (_, e) => { previewZoom = Math.Clamp(previewZoom * (e.Delta.Y > 0 ? 1.1 : 1 / 1.1), 0.25, 8); preview.RenderTransform = new ScaleTransform(previewZoom, previewZoom); e.Handled = true; };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
         var properties = new StackPanel { Spacing = 12 };
         properties.Children.Add(new TextBlock { Text = "ВЫБРАННЫЙ СТИКЕР", FontWeight = FontWeight.Bold });
@@ -174,9 +176,14 @@ public sealed class MainWindow : Window
         fragmentStart.ValueChanged += async (_, _) => await TransformChangedAsync();
         fragmentDuration.ValueChanged += async (_, _) => await TransformChangedAsync();
         properties.Children.Add(Button("Сбросить", async () => { if (SelectedEntry() is { } entry) { entry.Item.Transform = new(); LoadTransform(entry.Item.Transform); await TransformChangedAsync(); } }));
-        properties.Children.Add(Button("Копировать на выделенные", async () => { if (SelectedEntry() is not { } entry) return; foreach (var row in gallery.SelectedItems?.OfType<ListBoxItem>() ?? []) if (row.Tag is GalleryEntry target) target.Item.Transform = CopyTransform(entry.Item.Transform); MarkDirty(); await SelectAsync(); }));
-        properties.Children.Add(Button("512 × 512 / fit", () => { viewbox.Stretch = viewbox.Stretch == Stretch.None ? Stretch.Uniform : Stretch.None; return Task.CompletedTask; }));
-        properties.Children.Add(Button("Fit to window", () => { previewZoom = 1; preview.RenderTransform = null; return Task.CompletedTask; }));
+        applySelectedButton = Button("Применить настройки к выделенным", async () => { if (SelectedEntry() is not { } entry) return; foreach (var row in gallery.SelectedItems?.OfType<ListBoxItem>() ?? []) if (row.Tag is GalleryEntry target) target.Item.Transform = CopyTransform(entry.Item.Transform); MarkDirty(); await SelectAsync(); });
+        applySelectedButton.Content = new TextBlock { Text = "Применить настройки к выделенным", TextWrapping = TextWrapping.Wrap };
+        applySelectedButton.HorizontalAlignment = HorizontalAlignment.Stretch;
+        applySelectedButton.IsEnabled = false;
+        properties.Children.Add(applySelectedButton);
+        properties.Children.Add(new TextBlock { Text = "Копируются режим вписывания, масштаб, положение, поворот и параметры фрагмента текущего стикера.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75 });
+        properties.Children.Add(Button("Показать целиком", () => { viewbox.Width = double.NaN; viewbox.Height = double.NaN; return Task.CompletedTask; }));
+        properties.Children.Add(Button("Реальный размер 512×512", () => { var factor = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1; viewbox.Width = viewbox.Height = 512 / factor; return Task.CompletedTask; }));
         gifPlay.Click += (_, _) => ToggleGif();
         properties.Children.Add(gifPlay);
         videoPlay.Click += (_, _) => { if (videoPlayback is null) StartVideo(); else StopVideo(); };
@@ -221,12 +228,12 @@ public sealed class MainWindow : Window
     private async Task<bool> ConfirmDiscardAsync()
     {
         if (!dirty) return true;
-        var dialog = new Window { Title = "Unsaved changes", Width = 390, Height = 160, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var dialog = new Window { Title = "Несохранённые изменения", Width = 390, Height = 160, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 16 };
-        panel.Children.Add(new TextBlock { Text = "Discard unsaved changes?" });
+        panel.Children.Add(new TextBlock { Text = "Отменить несохранённые изменения?" });
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        buttons.Children.Add(Button("Discard", () => { dialog.Close(true); return Task.CompletedTask; }));
-        buttons.Children.Add(Button("Cancel", () => { dialog.Close(false); return Task.CompletedTask; }));
+        buttons.Children.Add(Button("Не сохранять", () => { dialog.Close(true); return Task.CompletedTask; }));
+        buttons.Children.Add(Button("Отмена", () => { dialog.Close(false); return Task.CompletedTask; }));
         panel.Children.Add(buttons); dialog.Content = panel;
         return await dialog.ShowDialog<bool>(this);
     }
@@ -234,7 +241,7 @@ public sealed class MainWindow : Window
     {
         if (!dirty && !busy) return;
         e.Cancel = true;
-        if (busy) { status.Text = "Cancel the current operation before closing."; return; }
+        if (busy) { status.Text = "Перед закрытием отмените текущую операцию."; return; }
         if (await ConfirmDiscardAsync()) { dirty = false; Close(); }
     }
     private async Task NewAsync()
@@ -245,18 +252,18 @@ public sealed class MainWindow : Window
     private async Task OpenAsync()
     {
         if (busy || !await ConfirmDiscardAsync()) return;
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Open project", AllowMultiple = false,
-            FileTypeFilter = [new FilePickerFileType("StickerForge project") { Patterns = ["*.stickerforge.json"] }] });
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Открыть проект", AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("Проект StickerForge") { Patterns = ["*.stickerforge.json"] }] });
         var path = files.FirstOrDefault()?.TryGetLocalPath();
         if (path is null) return;
         try
         {
             project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); RefreshGallery();
             await LoadThumbnailsAsync();
-            status.Text = "Project opened";
+            status.Text = "Проект открыт";
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
-        { status.Text = $"Open failed: {ex.Message}"; }
+        { status.Text = $"Не удалось открыть проект: {ex.Message}"; }
     }
     private async Task LoadThumbnailsAsync()
     {
@@ -278,25 +285,25 @@ public sealed class MainWindow : Window
         var path = saveAs ? null : projectPath;
         if (path is null)
         {
-            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Save project", SuggestedFileName = "pack.stickerforge.json",
-                FileTypeChoices = [new FilePickerFileType("StickerForge project") { Patterns = ["*.stickerforge.json"] }] });
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = "Сохранить проект", SuggestedFileName = "pack.stickerforge.json",
+                FileTypeChoices = [new FilePickerFileType("Проект StickerForge") { Patterns = ["*.stickerforge.json"] }] });
             path = file?.TryGetLocalPath();
         }
         if (path is null) return false;
-        try { await store.SaveAsync(project, path); projectPath = path; dirty = false; UpdateTitle(); status.Text = "Project saved"; return true; }
+        try { await store.SaveAsync(project, path); projectPath = path; dirty = false; UpdateTitle(); status.Text = "Проект сохранён"; return true; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        { status.Text = $"Save failed: {ex.Message}"; return false; }
+        { status.Text = $"Не удалось сохранить проект: {ex.Message}"; return false; }
     }
     private async Task PickFilesAsync()
     {
         if (busy) return;
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Import images", AllowMultiple = true });
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Добавить файлы", AllowMultiple = true });
         await ImportAsync(files.Select(f => f.TryGetLocalPath()).OfType<string>());
     }
     private async Task PickFolderAsync()
     {
         if (busy) return;
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Import folder", AllowMultiple = false });
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Добавить папку", AllowMultiple = false });
         var path = folders.FirstOrDefault()?.TryGetLocalPath();
         if (path is null) return;
         FolderScanResult scan;
@@ -305,17 +312,17 @@ public sealed class MainWindow : Window
         try
         {
             var token = importing.Token;
-            var report = new Progress<int>(count => status.Text = $"Scanning folder: {count} files");
+            var report = new Progress<int>(count => status.Text = $"Поиск файлов в папке: {count}");
             scan = await Task.Run(() => new FolderScanner().Scan(path, report, token), token);
         }
-        catch (OperationCanceledException) { status.Text = "Folder scan cancelled."; return; }
+        catch (OperationCanceledException) { status.Text = "Поиск файлов отменён."; return; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-        { status.Text = $"Folder error: {ex.Message}"; return; }
+        { status.Text = $"Ошибка папки: {ex.Message}"; return; }
         finally { importing.Dispose(); importing = null; busy = false; }
         await ImportAsync(scan.Files);
         if (scan.Errors.Count > 0)
         {
-            var dialog = new Window { Title = "Folder scan errors", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var dialog = new Window { Title = "Ошибки при чтении папки", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, scan.Errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
             await dialog.ShowDialog(this);
         }
@@ -323,8 +330,8 @@ public sealed class MainWindow : Window
     private async Task ExportAsync()
     {
         if (busy) return;
-        if (project.Stickers.Count == 0) { status.Text = "Add images before exporting."; return; }
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose export destination", AllowMultiple = false });
+        if (project.Stickers.Count == 0) { status.Text = "Добавьте файлы перед экспортом."; return; }
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
         var path = folders.FirstOrDefault()?.TryGetLocalPath();
         if (path is null || busy) return;
         var sources = project.Stickers.ToArray();
@@ -332,21 +339,21 @@ public sealed class MainWindow : Window
         busy = true; importing = new CancellationTokenSource();
         try
         {
-            var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = $"Exporting {p.Completed}/{p.Total}: {p.FileName}"; });
+            var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = $"Экспорт {p.Completed}/{p.Total}: {p.FileName}"; });
             var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
-            status.Text = result.Cancelled ? $"Export cancelled: {result.Exported} saved." : $"Exported {result.Exported} of {sources.Length} stickers.";
-            var lines = new List<string> { status.Text, $"Folder: {result.Directory}" };
-            if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Some files could not be exported:"); lines.AddRange(result.Errors); }
-            var dialog = new Window { Title = "Export report", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            status.Text = result.Cancelled ? $"Экспорт отменён. Готово файлов: {result.Exported} из {sources.Length}." : $"Готово файлов: {result.Exported} из {sources.Length}.";
+            var lines = new List<string> { status.Text, $"Ошибок: {result.Errors.Count}", $"Папка: {result.Directory}" };
+            if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Не удалось подготовить:"); lines.AddRange(result.Errors.Select(LocalizeError)); }
+            var dialog = new Window { Title = "Результат экспорта", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             var reportPanel = new DockPanel();
-            var openFolder = Button("Open folder", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Cannot open folder: {ex.Message}"; } return Task.CompletedTask; });
+            var openFolder = Button("Открыть папку", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Не удалось открыть папку: {ex.Message}"; } return Task.CompletedTask; });
             DockPanel.SetDock(openFolder, Dock.Bottom); reportPanel.Children.Add(openFolder);
             reportPanel.Children.Add(new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, lines), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } }); dialog.Content = reportPanel;
             await dialog.ShowDialog(this);
         }
-        catch (OperationCanceledException) { status.Text = "Export cancelled."; }
+        catch (OperationCanceledException) { status.Text = "Экспорт отменён."; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
-        { status.Text = $"Export failed: {ex.Message}"; }
+        { status.Text = $"Ошибка экспорта: {ex.Message}"; }
         finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
@@ -364,17 +371,17 @@ public sealed class MainWindow : Window
                 var result = results[0];
                 if (result.Item is not null && result.Info is not null)
                 { project.Stickers.Add(result.Item); cache[result.Item.Id] = result.Info; added++; MarkDirty(); }
-                else errors.Add($"{Path.GetFileName(result.Path)}: {result.Error}");
+                else errors.Add($"{Path.GetFileName(result.Path)}: {LocalizeError(result.Error ?? "Неизвестная ошибка.")}");
                 progress.Value = (i + 1d) / files.Length;
-                status.Text = $"Importing {i + 1}/{files.Length}";
+                status.Text = $"Импорт {i + 1}/{files.Length}";
             }
         }
-        catch (OperationCanceledException) { errors.Add("Import cancelled."); }
+        catch (OperationCanceledException) { errors.Add("Импорт отменён."); }
         finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; RefreshGallery(); }
-        status.Text = $"Imported {added}; errors: {errors.Count}.";
+        status.Text = $"Добавлено: {added}; ошибок: {errors.Count}.";
         if (errors.Count > 0)
         {
-            var dialog = new Window { Title = "Import report", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var dialog = new Window { Title = "Результат импорта", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
             await dialog.ShowDialog(this);
         }
@@ -390,11 +397,12 @@ public sealed class MainWindow : Window
         foreach (var old in gallery.Items.OfType<ListBoxItem>())
             if (old.Tag is GalleryEntry entry) entry.Thumbnail?.Dispose();
         gallery.Items.Clear();
+        var number = 0;
         foreach (var item in project.Stickers)
         {
+            number++;
             var name = Path.GetFileName(item.SourcePath);
             var exists = File.Exists(item.SourcePath);
-            var text = exists ? name : $"{name} — missing";
             Bitmap? thumbnail = null;
             if (cache.TryGetValue(item.Id, out var info))
             {
@@ -402,17 +410,84 @@ public sealed class MainWindow : Window
                 thumbnail = new Bitmap(stream);
             }
             var row = new StackPanel { Width = 146, Spacing = 4 };
-            row.Children.Add(new Image { Source = thumbnail, Width = 140, Height = 140, Stretch = Stretch.Uniform });
-            row.Children.Add(new TextBlock { Text = $"{project.Stickers.IndexOf(item) + 1:000}  {text}", TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 });
-            var card = new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail), Margin = new Thickness(3) };
-            ToolTip.SetTip(card, item.SourcePath);
+            var thumbnailGrid = new Grid { Width = 140, Height = 140 };
+            thumbnailGrid.Children.Add(new Image { Source = thumbnail, Stretch = Stretch.Uniform });
+            thumbnailGrid.Children.Add(Badge(number.ToString("000"), HorizontalAlignment.Left, VerticalAlignment.Top));
+            thumbnailGrid.Children.Add(Badge(exists ? SourceFormat(info, item.SourcePath) : "НЕТ ФАЙЛА", HorizontalAlignment.Right, VerticalAlignment.Top));
+            var duration = info?.Video?.DurationSeconds ?? (info?.FrameDurations is { Length: > 1 } frames ? frames.Sum(x => Math.Max(x, 20)) / 1000d : (double?)null);
+            if (duration is > 0) thumbnailGrid.Children.Add(Badge($"{duration:0.##} с", HorizontalAlignment.Right, VerticalAlignment.Bottom));
+            var activeBadge = Badge("ТЕКУЩИЙ", HorizontalAlignment.Left, VerticalAlignment.Bottom); activeBadge.IsVisible = false; thumbnailGrid.Children.Add(activeBadge);
+            var frame = new Border { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent, CornerRadius = new CornerRadius(6), Child = thumbnailGrid };
+            row.Children.Add(frame);
+            row.Children.Add(new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 });
+            var card = new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail, frame, activeBadge), Margin = new Thickness(3) };
+            ToolTip.SetTip(card, name);
             gallery.Items.Add(card);
         }
         refreshing = false;
         galleryHint.IsVisible = project.Stickers.Count == 0;
-        details.Text = $"{project.Stickers.Count} stickers. Select an image.";
+        details.Text = $"Стикеров: {project.Stickers.Count}. Выберите файл.";
         preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null;
+        UpdateSelection();
         UpdateTitle();
+    }
+    private static Border Badge(string text, HorizontalAlignment horizontal, VerticalAlignment vertical) => new()
+    {
+        HorizontalAlignment = horizontal, VerticalAlignment = vertical, Margin = new Thickness(4), Padding = new Thickness(5, 2),
+        Background = new SolidColorBrush(Color.Parse("#D9212938")), CornerRadius = new CornerRadius(4),
+        Child = new TextBlock { Text = text, FontSize = 10, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White }
+    };
+    private static string LocalizeError(string text)
+    {
+        foreach (var (english, russian) in new[] {
+            ("File exceeds 100 MB.", "Размер файла превышает 100 МБ."),
+            ("Unsupported or corrupt image.", "Формат не поддерживается или файл повреждён."),
+            ("Unsupported or damaged image.", "Формат не поддерживается или файл повреждён."),
+            ("Image dimensions exceed the limit.", "Размер изображения превышает допустимый."),
+            ("Image decoding failed.", "Не удалось прочитать изображение."),
+            ("Animation exceeds the frame limit.", "В анимации слишком много кадров."),
+            ("GIF exceeds the frame limit.", "В GIF слишком много кадров."),
+            ("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.", "Не удалось уменьшить анимацию до 256 КиБ. Выберите более короткий или простой фрагмент."),
+            ("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.", "Не удалось уменьшить изображение до 512 КиБ."),
+            ("Encoded video failed format validation.", "Полученное видео не прошло проверку формата."),
+            ("Encoded video duration is invalid.", "Длительность полученного видео недопустима."),
+            ("FFmpeg and FFprobe are unavailable; configure them to import video.", "Для импорта видео нужны FFmpeg и FFprobe."),
+            ("FFmpeg and FFprobe are unavailable; install or configure them to import video.", "Для импорта видео нужны FFmpeg и FFprobe."),
+            ("Media process failed:", "Ошибка обработки медиа:"),
+            ("Video duration is unavailable.", "Не удалось определить длительность видео.") }) text = text.Replace(english, russian, StringComparison.Ordinal);
+        return text;
+    }
+    private static string SourceFormat(ImageInfo? info, string path)
+    {
+        if (info is null) return "…";
+        if (info.Video is not { } video) return info.Format.Equals("Jpeg", StringComparison.OrdinalIgnoreCase) ? "JPG" : info.Format.ToUpperInvariant();
+        var format = video.Container ?? "";
+        if (format.Contains("apng", StringComparison.OrdinalIgnoreCase)) return "APNG";
+        if (format.Contains("matroska", StringComparison.OrdinalIgnoreCase))
+        {
+            try { using var stream = File.OpenRead(path); var bytes = new byte[Math.Min(4096, (int)Math.Min(stream.Length, 4096))]; stream.ReadExactly(bytes); return System.Text.Encoding.ASCII.GetString(bytes).Contains("webm", StringComparison.Ordinal) ? "WEBM" : "MKV"; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "MKV/WEBM"; }
+        }
+        if (format.Contains("mov", StringComparison.OrdinalIgnoreCase))
+        {
+            try { using var stream = File.OpenRead(path); Span<byte> bytes = stackalloc byte[12]; stream.ReadExactly(bytes); return bytes[8..12].SequenceEqual("qt  "u8) ? "MOV" : "MP4"; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return "MP4/MOV"; }
+        }
+        return format.Contains("avi", StringComparison.OrdinalIgnoreCase) ? "AVI" : string.IsNullOrEmpty(format) ? "ВИДЕО" : format.Split(',')[0].ToUpperInvariant();
+    }
+    private void UpdateSelection()
+    {
+        var count = gallery.SelectedItems?.Count ?? 0;
+        selectionCount.Text = count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}";
+        if (exportButton is not null) exportButton.Content = $"Экспортировать стикеры ({project.Stickers.Count})";
+        if (applySelectedButton is not null) applySelectedButton.IsEnabled = count > 1;
+        foreach (var card in gallery.Items.OfType<ListBoxItem>())
+        {
+            if (card.Tag is not GalleryEntry entry) continue;
+            var active = card.IsSelected && ReferenceEquals(gallery.SelectedItem, card);
+            entry.Frame.BorderBrush = active ? new SolidColorBrush(Color.Parse("#A98BFF")) : card.IsSelected ? new SolidColorBrush(Color.Parse("#588EDD")) : Brushes.Transparent;
+            entry.ActiveBadge.IsVisible = active && count > 1;
+        }
     }
     private void OnDragOver(object? sender, DragEventArgs e)
     {
@@ -454,7 +529,7 @@ public sealed class MainWindow : Window
         try
         {
             var token = importing.Token;
-            var report = new Progress<int>(count => status.Text = $"Scanning dropped folders: {count} files");
+            var report = new Progress<int>(count => status.Text = $"Поиск файлов в добавленных папках: {count}");
             foreach (var path in paths)
             {
                 token.ThrowIfCancellationRequested();
@@ -466,12 +541,12 @@ public sealed class MainWindow : Window
                 else all.Add(path);
             }
         }
-        catch (OperationCanceledException) { status.Text = "Drop cancelled."; return; }
+        catch (OperationCanceledException) { status.Text = "Добавление отменено."; return; }
         finally { importing.Dispose(); importing = null; busy = false; }
         await ImportAsync(all);
         if (errors.Count > 0)
         {
-            var dialog = new Window { Title = "Folder scan errors", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var dialog = new Window { Title = "Ошибки при чтении папок", Width = 620, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
             await dialog.ShowDialog(this);
         }
@@ -497,7 +572,6 @@ public sealed class MainWindow : Window
     }
     private async Task SelectAsync()
     {
-        previewZoom = 1; preview.RenderTransform = null;
         ClearVideo();
         StopGif();
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
@@ -505,14 +579,14 @@ public sealed class MainWindow : Window
         if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
         var item = entry.Item;
         LoadTransform(item.Transform);
-        details.Text = $"Loading {Path.GetFileName(item.SourcePath)}…";
+        details.Text = $"Загрузка: {Path.GetFileName(item.SourcePath)}…";
         try
         {
             if (!cache.TryGetValue(item.Id, out var info))
             {
                 var result = (await importer.ImportAsync([item.SourcePath]))[0];
                 if (generation != previewGeneration) return;
-                if (result.Info is null) { details.Text = result.Error; return; }
+                if (result.Info is null) { details.Text = $"Не удалось прочитать файл: {LocalizeError(result.Error ?? "Неизвестная ошибка.")}"; return; }
                 info = result.Info; cache[item.Id] = info;
             }
             var firstFrame = info.FrameDurations is { Length: > 0 } frameDurations ? FrameAt(frameDurations, item.Transform.StartSeconds) : 0;
@@ -524,10 +598,10 @@ public sealed class MainWindow : Window
             using var stream = new MemoryStream(bytes);
             var bitmap = new Bitmap(stream);
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
-            details.Text = $"{Path.GetFileName(item.SourcePath)}\n{info.Format} · {info.Width} × {info.Height}\nГотов к подготовке";
+            details.Text = $"{Path.GetFileName(item.SourcePath)}\n{SourceFormat(info, item.SourcePath)} · {info.Width} × {info.Height}\nГотов к подготовке";
             if (info.Video is { } video)
             {
-                details.Text += $"\n{video.Codec} · {video.FramesPerSecond?.ToString("0.##") ?? "unknown"} fps\n{video.DurationSeconds:0.00} s · alpha: {(video.HasAlpha == true ? "present" : "unknown")}";
+                details.Text += $"\n{video.DurationSeconds:0.00} с · {video.FramesPerSecond?.ToString("0.##") ?? "?"} кадров/с";
                 videoPath = item.SourcePath; videoMetadata = video;
                 updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = 0; updatingSeek = false;
                 videoPlay.IsVisible = videoSeek.IsVisible = videoTime.IsVisible = true;
@@ -536,12 +610,12 @@ public sealed class MainWindow : Window
             if (info.FrameDurations is { Length: > 1 } durations)
             {
                 gifPath = item.SourcePath; gifDurations = durations; gifFrame = firstFrame;
-                details.Text += $"\n{durations.Sum() / 1000d:0.00} s · {durations.Length} frames";
+                details.Text += $"\n{durations.Sum() / 1000d:0.00} с · кадров: {durations.Length}";
                 gifPlay.IsVisible = true;
             }
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
-        { if (generation == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+        { if (generation == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
     }
     private GalleryEntry? SelectedEntry() => (gallery.SelectedItem as ListBoxItem)?.Tag as GalleryEntry;
     private static TransformSettings CopyTransform(TransformSettings t) => new() { Fit = t.Fit, Scale = t.Scale, OffsetX = t.OffsetX, OffsetY = t.OffsetY, Rotation = t.Rotation, StartSeconds = t.StartSeconds, DurationSeconds = t.DurationSeconds };
@@ -566,7 +640,7 @@ public sealed class MainWindow : Window
             {
                 var frameGeneration = ++previewGeneration; var frameSettings = CopyTransform(t); var index = FrameAt(info.FrameDurations, frameSettings.StartSeconds);
                 try { var frame = await Task.Run(() => RenderPreview(GifFrameReader.ReadFrame(entry.Item.SourcePath, index), frameSettings)); if (frameGeneration == previewGeneration) { gifFrame = index; SetPreview(frame); } }
-                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { if (frameGeneration == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { if (frameGeneration == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
             }
             return;
         }
@@ -579,7 +653,7 @@ public sealed class MainWindow : Window
             using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { status.Text = $"Preview failed: {ex.Message}"; }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { status.Text = $"Ошибка предпросмотра: {ex.Message}"; }
     }
     private static byte[] RenderPreview(byte[] bytes, TransformSettings transform)
     {
@@ -602,7 +676,7 @@ public sealed class MainWindow : Window
     private void UpdateVideoTime(double seconds) => videoTime.Text = $"{TimeSpan.FromSeconds(seconds).ToString(@"mm\:ss\.ff")} / {TimeSpan.FromSeconds(videoMetadata?.DurationSeconds ?? 0).ToString(@"mm\:ss\.ff")}";
     private void StopVideo()
     {
-        videoPlayback?.Cancel(); videoPlayback = null; videoPlay.Content = "Play";
+        videoPlayback?.Cancel(); videoPlayback = null; videoPlay.Content = "Воспроизвести";
     }
     private void ClearVideo()
     {
@@ -615,7 +689,7 @@ public sealed class MainWindow : Window
     {
         if (videoPath is null || videoMetadata is null) return;
         videoSeekRequest?.Cancel(); videoSeekRequest = null;
-        var source = new CancellationTokenSource(); videoPlayback = source; videoPlay.Content = "Pause";
+        var source = new CancellationTokenSource(); videoPlayback = source; videoPlay.Content = "Пауза";
         _ = PlayVideoAsync(videoPath, videoMetadata, videoSeek.Value, source);
     }
     private async Task PlayVideoAsync(string path, VideoMetadata metadata, double start, CancellationTokenSource source)
@@ -651,10 +725,10 @@ public sealed class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
-        { status.Text = $"Video playback failed: {ex.Message}"; }
+        { status.Text = $"Ошибка воспроизведения видео: {ex.Message}"; }
         finally
         {
-            if (ReferenceEquals(videoPlayback, source)) { videoPlayback = null; videoPlay.Content = "Play"; }
+            if (ReferenceEquals(videoPlayback, source)) { videoPlayback = null; videoPlay.Content = "Воспроизвести"; }
             source.Dispose();
         }
     }
@@ -675,14 +749,14 @@ public sealed class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
-        { if (generation == previewGeneration) status.Text = $"Seek failed: {ex.Message}"; }
+        { if (generation == previewGeneration) status.Text = $"Ошибка перемотки: {ex.Message}"; }
         finally { if (ReferenceEquals(videoSeekRequest, source)) videoSeekRequest = null; source.Dispose(); }
     }
     private void StopGif()
     {
         gifPlayback?.Cancel();
         gifPlayback = null;
-        gifPlay.Content = "Play";
+        gifPlay.Content = "Воспроизвести";
     }
     private void ToggleGif()
     {
@@ -690,7 +764,7 @@ public sealed class MainWindow : Window
         if (gifPath is null || gifDurations is null) return;
         var source = new CancellationTokenSource();
         gifPlayback = source;
-        gifPlay.Content = "Pause";
+        gifPlay.Content = "Пауза";
         _ = PlayGifAsync(gifPath, gifDurations, source);
     }
     private async Task PlayGifAsync(string path, int[] durations, CancellationTokenSource source)
@@ -718,10 +792,10 @@ public sealed class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
-        { status.Text = $"GIF playback failed: {ex.Message}"; }
+        { status.Text = $"Ошибка воспроизведения анимации: {ex.Message}"; }
         finally
         {
-            if (ReferenceEquals(gifPlayback, source)) { gifPlayback = null; gifPlay.Content = "Play"; }
+            if (ReferenceEquals(gifPlayback, source)) { gifPlayback = null; gifPlay.Content = "Воспроизвести"; }
             source.Dispose();
         }
     }
@@ -761,5 +835,5 @@ public sealed class MainWindow : Window
             e.Handled = true;
         }
     }
-    private sealed record GalleryEntry(StickerItem Item, Bitmap? Thumbnail);
+    private sealed record GalleryEntry(StickerItem Item, Bitmap? Thumbnail, Border Frame, Border ActiveBadge);
 }

@@ -36,6 +36,7 @@ public sealed class VideoIntegrationTests
                 var service = new FfmpegService();
                 Assert.True((await service.CheckAsync()).Available);
                 var metadata = await service.ProbeAsync(path);
+                Assert.Contains(name.EndsWith(".mp4", StringComparison.Ordinal) ? "mov" : "matroska", metadata.Container);
                 Assert.Equal(64, metadata.Width);
                 Assert.Equal(48, metadata.Height);
                 Assert.InRange(metadata.DurationSeconds, 0.9, 1.1);
