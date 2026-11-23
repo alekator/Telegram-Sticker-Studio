@@ -24,6 +24,7 @@ public sealed class WindowLayoutTestApp : Application
     public override void Initialize() => Styles.Add(new FluentTheme());
 }
 
+[Collection("Avalonia Headless")]
 public sealed class WindowLayoutTests
 {
     [Fact]
@@ -75,7 +76,7 @@ public sealed class WindowLayoutTests
                     var inputs = editing.GetVisualDescendants().OfType<TextBox>().ToArray();
                     Assert.Equal(4, inputs.Length);
                     foreach (var input in inputs)
-                    { Assert.InRange(input.Bounds.Width, 99, 101); Assert.InRange(input.Bounds.Height, 33, 35); Assert.Equal(14, input.FontSize); }
+                    { Assert.InRange(input.Bounds.Width, 67, 69); Assert.InRange(input.Bounds.Height, 33, 35); Assert.Equal(14, input.FontSize); }
                     var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var transformBefore = JsonSerializer.Serialize(project.Stickers[0].Transform);
                     typeof(MainWindow).GetMethod("ActualPreviewSize", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null); await Task.Delay(100); CheckCanvasFits();

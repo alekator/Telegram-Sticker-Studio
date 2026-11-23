@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-<PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+<PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ApplicationIcon>Assets/StickerForge.ico</ApplicationIcon></PropertyGroup>
 <ItemGroup><PackageReference Include="Avalonia.Desktop" Version="12.1.6" /><PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" /></ItemGroup>
+<ItemGroup><AvaloniaResource Include="Assets/StickerForge.ico" /><AvaloniaResource Include="Assets/StickerForge.png" /></ItemGroup>
 <ItemGroup>
   <ProjectReference Include="../StickerForge.Core/StickerForge.Core.csproj" />
   <ProjectReference Include="../StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
