@@ -7,6 +7,19 @@ namespace StickerForge.Tests;
 public sealed class FfmpegLocatorTests
 {
     [Fact]
+    public async Task StandaloneRejectsMissingOrChangedToolsEvenWhenSystemToolsExist()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, FfmpegLocator.StandaloneMarker), "standalone");
+            var service = FfmpegLocator.CreateForDirectory(root, Path.Combine(root, "other"), new Dictionary<string, FfmpegBinaryHashes>());
+            var availability = await service.CheckAsync(); Assert.False(availability.Available); Assert.Contains("повреждены", availability.Message);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ProbeAsync(Path.Combine(root, "input.mp4")));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [Fact]
     public void PrefersVerifiedAppFilesAndRejectsChangedFiles()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

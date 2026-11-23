@@ -59,8 +59,8 @@ public sealed class VideoIntegrationTests
         try
         {
             var cfr = Path.Combine(dir, "fractional.mp4"); var vfr = Path.Combine(dir, "variable.mp4");
-            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=23893/1000", "-t", "10", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", cfr);
-            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=30", "-t", "10", "-vf", @"select=not(mod(n\,3))+not(mod(n\,5))", "-fps_mode", "vfr", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", vfr);
+            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=23893/1000", "-t", "10", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", cfr);
+            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=30", "-t", "10", "-vf", @"select=not(mod(n\,3))+not(mod(n\,5))", "-fps_mode", "vfr", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", vfr);
             var packetJson = await RunAsync("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "json", vfr);
             using (var packets = System.Text.Json.JsonDocument.Parse(packetJson))
             {
@@ -120,7 +120,7 @@ public sealed class VideoIntegrationTests
         Directory.CreateDirectory(dir);
         try
         {
-            foreach (var (name, codec) in new[] { ("sample.mp4", "libx264"), ("sample.webm", "libvpx-vp9") })
+            foreach (var (name, codec) in new[] { ("sample.mp4", "mpeg4"), ("sample.webm", "libvpx-vp9") })
             {
                 var path = Path.Combine(dir, name);
                 var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true };

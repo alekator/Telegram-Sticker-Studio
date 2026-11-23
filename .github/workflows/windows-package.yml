@@ -1,0 +1,66 @@
+name: Windows standalone package
+on:
+  push:
+    branches: [feature/standalone-windows-distribution]
+  pull_request:
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.110
+      - run: dotnet restore StickerForge.sln -r win-x64 --locked-mode
+      - run: dotnet build StickerForge.sln --configuration Release --no-restore
+      - run: dotnet test StickerForge.sln --configuration Release --no-build --no-restore
+      - name: Download pinned FFmpeg archive
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-23-12-43/ffmpeg-n9.0.2-62-gac1c6e003f-win64-lgpl-9.0.zip'
+          curl.exe --fail --location --retry 3 --output "$env:RUNNER_TEMP/ffmpeg.zip" $url
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg download failed.' }
+      - name: Verify and publish package
+        shell: pwsh
+        run: ./eng/package-windows.ps1 -FfmpegArchive "$env:RUNNER_TEMP/ffmpeg.zip"
+      - name: Verify extracted ZIP without system FFmpeg or .NET PATH
+        shell: pwsh
+        run: |
+          $dotnet = (Get-Command dotnet).Source
+          $package = Join-Path $env:RUNNER_TEMP 'stickerforge-extracted'
+          Expand-Archive -LiteralPath 'artifacts/StickerForge-Studio-win-x64.zip' -DestinationPath $package
+          $oldPath = $env:PATH
+          $oldRoot = $env:DOTNET_ROOT
+          try {
+            $env:PATH = "$env:SystemRoot\System32"
+            $env:DOTNET_ROOT = Join-Path $env:RUNNER_TEMP 'no-dotnet-installed'
+            $env:STICKERFORGE_PACKAGE_DIR = $package
+            Push-Location $env:RUNNER_TEMP
+            try {
+              & $dotnet test "$env:GITHUB_WORKSPACE/tests/StickerForge.Tests/StickerForge.Tests.csproj" -c Release --no-build --no-restore --filter FullyQualifiedName~BundledToolTests
+              if ($LASTEXITCODE -ne 0) { throw 'Bundled FFmpeg smoke test failed.' }
+              $app = Start-Process -FilePath (Join-Path $package 'StickerForge.Desktop.exe') -WorkingDirectory $env:RUNNER_TEMP -PassThru -WindowStyle Hidden
+              try {
+                Start-Sleep -Seconds 5
+                $app.Refresh()
+                if ($app.HasExited) { throw "Standalone application exited with $($app.ExitCode)." }
+              } finally { if (-not $app.HasExited) { $app.CloseMainWindow() | Out-Null; if (-not $app.WaitForExit(3000)) { Stop-Process -Id $app.Id -Force } } }
+            } finally { Pop-Location }
+          } finally { $env:PATH = $oldPath; $env:DOTNET_ROOT = $oldRoot; Remove-Item Env:STICKERFORGE_PACKAGE_DIR -ErrorAction SilentlyContinue }
+      - name: Run full FFmpeg integration suite using bundled tools
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:GITHUB_WORKSPACE/artifacts/windows-package/tools/ffmpeg/windows/x64;$env:PATH"
+          $env:STICKERFORGE_FFMPEG_INTEGRATION = '1'
+          dotnet test StickerForge.sln --configuration Release --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg integration suite failed.' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: StickerForge-Studio-win-x64
+          path: artifacts/StickerForge-Studio-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0

@@ -16,11 +16,13 @@ public sealed class FfmpegService
     private static readonly SemaphoreSlim Processes = new(2, 2);
     private readonly string ffmpeg;
     private readonly string ffprobe;
+    private readonly string? unavailableReason;
 
-    public FfmpegService(string ffmpeg = "ffmpeg", string ffprobe = "ffprobe")
+    public FfmpegService(string ffmpeg = "ffmpeg", string ffprobe = "ffprobe", string? unavailableReason = null)
     {
         this.ffmpeg = ffmpeg;
         this.ffprobe = ffprobe;
+        this.unavailableReason = unavailableReason;
     }
 
     public async Task<FfmpegAvailability> CheckAsync(CancellationToken cancellationToken = default)
@@ -95,6 +97,7 @@ public sealed class FfmpegService
     public async IAsyncEnumerable<VideoFrame> StreamFramesAsync(string path, VideoMetadata metadata, double startSeconds,
         [EnumeratorCancellation] CancellationToken cancellationToken = default, TransformSettings? transform = null)
     {
+        if (unavailableReason is not null) throw new InvalidOperationException(unavailableReason);
         if (!double.IsFinite(startSeconds) || startSeconds < 0 || startSeconds >= metadata.DurationSeconds)
             throw new ArgumentOutOfRangeException(nameof(startSeconds));
         var scale = Math.Min(1d, 640d / Math.Max(metadata.Width, metadata.Height));
@@ -146,8 +149,9 @@ public sealed class FfmpegService
     internal Task<byte[]> RunEncoderAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffmpeg, arguments, 1024 * 1024, cancellationToken, true);
     internal Task<byte[]> RunProbeAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffprobe, arguments, 1024 * 1024, cancellationToken, true);
 
-    private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken, bool exportDiagnostics = false)
+    private async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken, bool exportDiagnostics = false)
     {
+        if (unavailableReason is not null) throw new InvalidOperationException(unavailableReason);
         await Processes.WaitAsync(cancellationToken);
         try
         {
