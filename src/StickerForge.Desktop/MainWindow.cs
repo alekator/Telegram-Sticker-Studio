@@ -559,15 +559,16 @@ public sealed class MainWindow : Window
             var name = project.Name;
             var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = $"Экспорт {p.Completed}/{p.Total}: {p.FileName}"; });
             var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
-            status.Text = result.Cancelled ? $"Экспорт отменён. Готово файлов: {result.Exported} из {sources.Length}." : $"Готово файлов: {result.Exported} из {sources.Length}.";
-            var lines = new List<string> { status.Text, $"Ошибок: {result.Errors.Count}", $"Папка: {result.Directory}" };
+            status.Text = result.Exported == sources.Length ? $"Успешно подготовлено {result.Exported} из {sources.Length}." : "Экспорт не завершён. Готовый набор не создан.";
+            var lines = new List<string> { status.Text, $"Ошибок: {result.Errors.Count}" };
+            if (result.Exported == sources.Length) lines.Add($"Папка: {result.Directory}");
             if (result.Successes.Count > 0) { lines.Add(""); lines.Add("Подготовлены:"); lines.AddRange(result.Successes); }
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Не удалось подготовить:"); lines.AddRange(result.Errors.Select(ExportError)); }
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add($"Журнал диагностики: {ExportDiagnostics.LogPath}"); }
             var dialog = new Window { Title = "Результат экспорта", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             var reportPanel = new DockPanel();
             var openFolder = Button("Открыть папку", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Не удалось открыть папку: {ex.Message}"; } return Task.CompletedTask; });
-            DockPanel.SetDock(openFolder, Dock.Bottom); reportPanel.Children.Add(openFolder);
+            if (result.Exported == sources.Length) { DockPanel.SetDock(openFolder, Dock.Bottom); reportPanel.Children.Add(openFolder); }
             reportPanel.Children.Add(new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, lines), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } }); dialog.Content = reportPanel;
             await dialog.ShowDialog(this);
         }
@@ -575,7 +576,7 @@ public sealed class MainWindow : Window
         catch (Exception ex)
         {
             ExportDiagnostics.Write($"export failed: {ex}");
-            status.Text = $"Ошибка экспорта: {LocalizeError(ex.Message)} Проверьте исходные файлы и доступ к папке, затем повторите экспорт.";
+            status.Text = "Экспорт не завершён. Проверьте исходные файлы, FFmpeg и доступ к папке; подробности в журнале экспорта.";
         }
         finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
@@ -690,7 +691,11 @@ public sealed class MainWindow : Window
             return $"{text.Split(':')[0]}: не удалось прочитать размеры видео или они превышают допустимые. Проверьте файл и попробуйте другой источник.";
         var localized = LocalizeError(text);
         if (text.Contains("Cannot fit this", StringComparison.Ordinal) || text.Contains("File exceeds 100 MB.", StringComparison.Ordinal)) return localized;
-        return localized + " Проверьте исходный файл и доступ к нему; для анимации также проверьте наличие FFmpeg и FFprobe.";
+        var separator = localized.IndexOf(": ", StringComparison.Ordinal);
+        var name = separator >= 0 ? localized[..separator] : "Файл";
+        var reason = separator >= 0 ? localized[(separator + 2)..] : localized;
+        if (!reason.Any(c => c is >= 'А' and <= 'я' or 'Ё' or 'ё')) reason = "Не удалось прочитать или проверить файл.";
+        return $"{name}: {reason} Проверьте файл, доступ к нему и наличие FFmpeg/FFprobe.";
     }
     private static string SourceFormat(ImageInfo? info, string path)
     {
