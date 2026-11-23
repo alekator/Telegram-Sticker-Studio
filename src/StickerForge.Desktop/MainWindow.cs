@@ -36,8 +36,6 @@ public sealed class MainWindow : Window
     private readonly TextBlock selectionCount = new() { Margin = new Thickness(4, 0, 4, 8), Opacity = .8 };
     private Button? exportButton;
     private Button? applySelectedButton;
-    private Button? galleryToggle;
-    private Button? propertiesToggle;
     private ContextMenu? galleryMenu;
     private readonly ProgressBar progress = new() { Minimum = 0, Maximum = 1, Width = 150, Height = 8 };
     private readonly Dictionary<Guid, ImageInfo> cache = [];
@@ -115,7 +113,7 @@ public sealed class MainWindow : Window
     private Control? settingsPage;
     private ContextMenu? projectMenu;
     private Button? stickersNavigation;
-    private Button? settingsNavigation;
+    private Button? settingsButton;
 
     public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null)
     {
@@ -133,28 +131,34 @@ public sealed class MainWindow : Window
         Resources["SystemControlHighlightListAccentLowBrush"] = studioTheme.Selected;
         layout = this.layoutStore.Load();
         var root = new DockPanel { Margin = new Thickness(8) };
-        var menuBar = new Menu();
-        menuBar.Items.Add(MenuGroup("Файл", MenuAction("Новый проект", NewAsync), MenuAction("Открыть проект…", OpenAsync), MenuAction("Сохранить", async () => { await SaveAsync(false); }), MenuAction("Сохранить как…", async () => { await SaveAsync(true); }), MenuAction("Экспортировать стикеры…", ExportAsync)));
-        menuBar.Items.Add(MenuGroup("Правка", MenuAction("Удалить выделенные", RemoveSelected), MenuAction("Сбросить подгонку", ResetSelectedAsync), MenuAction("Применить настройки к выделенным", ApplySelectedAsync)));
-        menuBar.Items.Add(MenuGroup("Вид", MenuAction("Показать или скрыть галерею", () => { ToggleGallery(); return Task.CompletedTask; }), MenuAction("Показать или скрыть свойства", () => { ToggleProperties(); return Task.CompletedTask; }), MenuAction("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }), MenuAction("Показать 1:1", () => { ActualPreviewSize(); return Task.CompletedTask; })));
-        menuBar.Items.Add(MenuGroup("Стикеры", MenuAction("Добавить файлы…", PickFilesAsync), MenuAction("Добавить папку…", PickFolderAsync), MenuAction("Переместить выше", () => MoveSelected(-1)), MenuAction("Переместить ниже", () => MoveSelected(1))));
-        menuBar.Items.Add(MenuGroup("Помощь", MenuAction("О программе", ShowAboutAsync)));
         projectMenu = new ContextMenu();
-        foreach (var group in menuBar.Items.OfType<MenuItem>().ToArray()) { menuBar.Items.Remove(group); projectMenu.Items.Add(group); }
+        projectMenu.Items.Add(MenuAction("Новый проект", NewAsync));
+        projectMenu.Items.Add(MenuAction("Сохранить как…", async () => { await SaveAsync(true); }));
+        projectMenu.Items.Add(MenuAction("Добавить папку…", PickFolderAsync));
+        projectMenu.Items.Add(MenuAction("Показать или скрыть галерею", () => { ToggleGallery(); return Task.CompletedTask; }));
+        projectMenu.Items.Add(MenuAction("Показать или скрыть свойства", () => { ToggleProperties(); return Task.CompletedTask; }));
+        projectMenu.Items.Add(MenuAction("О программе", ShowAboutAsync));
         StudioLocalization.Capture(projectMenu);
         var top = new DockPanel { LastChildFill = false };
-        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 24, 0) };
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 12, 0) };
         brand.Children.Add(new Border { Background = studioTheme.Accent, CornerRadius = new CornerRadius(8), Padding = new Thickness(7), Child = Icon("M3 12 L21 4 L16 20 L12 14 Z M12 14 L21 4", 20, Brushes.White) });
-        brand.Children.Add(new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center });
+        var brandName = new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center };
+        brand.Children.Add(brandName);
         DockPanel.SetDock(brand, Dock.Left); top.Children.Add(brand);
-        var projectButton = Button("☰", () => Task.CompletedTask, "Команды проекта");
+        var addAction = ActionButton("M12 4 L12 20 M4 12 L20 12", "Добавить", PickFilesAsync, "Добавить файлы · Ctrl+I"); addAction.Name = "AddFilesAction";
+        var openAction = ActionButton("M3 7 L9 7 L11 9 L21 9 L19 19 L3 19 Z M3 7 L3 5 L9 5 L11 7", "Открыть", OpenAsync, "Открыть проект"); openAction.Name = "OpenProjectAction";
+        var saveAction = ActionButton("M4 3 L18 3 L21 6 L21 21 L3 21 L3 3 Z M7 3 L7 9 L17 9 L17 3 M7 21 L7 14 L17 14 L17 21", "Сохранить", async () => { await SaveAsync(false); }, "Сохранить проект · Ctrl+S"); saveAction.Name = "SaveProjectAction";
+        DockPanel.SetDock(addAction, Dock.Left); top.Children.Add(addAction);
+        DockPanel.SetDock(openAction, Dock.Left); top.Children.Add(openAction);
+        DockPanel.SetDock(saveAction, Dock.Left); top.Children.Add(saveAction);
+        var projectButton = Button("⋯", () => Task.CompletedTask, "Другие действия"); projectButton.Name = "MoreActions";
         projectButton.ContextMenu = projectMenu; projectButton.Click += (_, _) => projectMenu.Open(projectButton);
         DockPanel.SetDock(projectButton, Dock.Left); top.Children.Add(projectButton);
         packName.VerticalAlignment = VerticalAlignment.Center; DockPanel.SetDock(packName, Dock.Left); top.Children.Add(packName);
-        var settingsButton = IconButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", ShowSettingsAsync, "Настройки");
+        settingsButton = IconButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", ShowSettingsAsync, "Настройки"); settingsButton.Name = "SettingsAction";
         DockPanel.SetDock(settingsButton, Dock.Right); top.Children.Add(settingsButton);
-        propertiesToggle = Button("Свойства", () => { ToggleProperties(); return Task.CompletedTask; }, "Показать или скрыть свойства"); DockPanel.SetDock(propertiesToggle, Dock.Right); top.Children.Add(propertiesToggle);
-        galleryToggle = Button("Галерея", () => { ToggleGallery(); return Task.CompletedTask; }, "Показать или скрыть галерею"); DockPanel.SetDock(galleryToggle, Dock.Right); top.Children.Add(galleryToggle);
+        void AdaptToolbar() { var compact = ClientSize.Width < 920; brandName.IsVisible = !compact; packName.Width = compact ? 100 : 180; }
+        SizeChanged += (_, _) => AdaptToolbar(); AdaptToolbar();
         exportButton = Button("Экспортировать стикеры", ExportAsync, "Подготовить файлы для Telegram");
         exportButton.Background = studioTheme.Accent; exportButton.Foreground = Brushes.White;
         var toolbar = new Border { Child = top, Background = studioTheme.Panel, CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 5), Margin = new Thickness(0, 0, 0, 8) };
@@ -364,9 +368,8 @@ public sealed class MainWindow : Window
         var pages = new Grid(); pages.Children.Add(columns); pages.Children.Add(settingsPage);
         var navigation = new StackPanel { Width = 78, Spacing = 8, Margin = new Thickness(0, 0, 8, 0) };
         stickersNavigation = NavButton("M4 5 L20 5 L20 19 L4 19 Z M8 15 L11 12 L14 15 L17 11 M8 9 L8.1 9", "Стикеры", () => { ShowEditor(); return Task.CompletedTask; });
-        settingsNavigation = NavButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", "Настройки", ShowSettingsAsync);
         stickersNavigation.Background = studioTheme.Selected;
-        navigation.Children.Add(stickersNavigation); navigation.Children.Add(settingsNavigation);
+        navigation.Children.Add(stickersNavigation);
         var shell = new DockPanel(); DockPanel.SetDock(navigation, Dock.Left); shell.Children.Add(navigation); shell.Children.Add(pages);
         root.Children.Add(shell); Content = root;
         StudioLocalization.Capture(root); ApplyPreferences();
@@ -412,8 +415,16 @@ public sealed class MainWindow : Window
         }
         UpdateTransformLabels(); UpdateSelection();
     }
-    private void ShowEditor() { if (editorPage is not null) editorPage.IsVisible = true; if (settingsPage is not null) settingsPage.IsVisible = false; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Selected; if (settingsNavigation is not null) settingsNavigation.Background = studioTheme.Surface; }
-    private Task ShowSettingsAsync() { if (editorPage is not null) editorPage.IsVisible = false; if (settingsPage is not null) settingsPage.IsVisible = true; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Surface; if (settingsNavigation is not null) settingsNavigation.Background = studioTheme.Selected; return Task.CompletedTask; }
+    private void ShowEditor() { if (editorPage is not null) editorPage.IsVisible = true; if (settingsPage is not null) settingsPage.IsVisible = false; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Selected; if (settingsButton is not null) settingsButton.Background = studioTheme.Surface; }
+    private Task ShowSettingsAsync()
+    {
+        if (settingsPage?.IsVisible == true) { ShowEditor(); return Task.CompletedTask; }
+        if (editorPage is not null) editorPage.IsVisible = false;
+        if (settingsPage is not null) settingsPage.IsVisible = true;
+        if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Surface;
+        if (settingsButton is not null) settingsButton.Background = studioTheme.Selected;
+        return Task.CompletedTask;
+    }
     private Control CreateSettingsPage()
     {
         var panel = new StackPanel { Margin = new Thickness(24), Spacing = 16, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -446,17 +457,20 @@ public sealed class MainWindow : Window
     {
         var button = Button("", action, tooltip); button.Content = Icon(path, 20, studioTheme.Text); button.Background = studioTheme.Surface; return button;
     }
+    private Button ActionButton(string path, string title, Func<Task> action, string tooltip)
+    {
+        var button = Button("", action, tooltip);
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        content.Children.Add(Icon(path, 16, studioTheme.Text));
+        content.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center });
+        button.Content = content;
+        return button;
+    }
     private Button NavButton(string path, string title, Func<Task> action)
     {
         var button = Button("", action, title); button.Background = studioTheme.Surface; button.Margin = new Thickness(0); button.Padding = new Thickness(4, 10);
         var content = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
         content.Children.Add(Icon(path, 22, studioTheme.Text)); content.Children.Add(new TextBlock { Text = title, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center }); button.Content = content; return button;
-    }
-    private static MenuItem MenuGroup(string title, params MenuItem[] actions)
-    {
-        var item = new MenuItem { Header = title };
-        foreach (var action in actions) item.Items.Add(action);
-        return item;
     }
     private async Task ResetSelectedAsync()
     {
@@ -867,8 +881,6 @@ public sealed class MainWindow : Window
     {
         ApplyPanelLayout();
         var count = gallery.SelectedItems?.Count ?? 0;
-        if (galleryToggle is not null) galleryToggle.IsVisible = project.Stickers.Count > 0;
-        if (propertiesToggle is not null) propertiesToggle.IsVisible = project.Stickers.Count > 0;
         selectionCount.Text = preferences.Language == "en" ? (count > 0 ? $"Selected: {count} of {project.Stickers.Count}" : $"Files: {project.Stickers.Count}") : (count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}");
         if (exportButton is not null) { exportButton.Content = preferences.Language == "en" ? $"Export {project.Stickers.Count} stickers" : $"Экспортировать {project.Stickers.Count} стикеров"; exportButton.IsEnabled = project.Stickers.Count > 0 && !busy; }
         var hasSelection = SelectedEntry() is not null;
