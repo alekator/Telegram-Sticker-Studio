@@ -10,5 +10,6 @@
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
     <PackageReference Include="WTelegramClient" Version="4.4.11" />
   </ItemGroup>
+  <ItemGroup><EmbeddedResource Include="emoji-test-17.0.txt" /></ItemGroup>
 
 </Project>

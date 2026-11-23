@@ -4,7 +4,10 @@ using System.Text;
 
 namespace StickerForge.Telegram;
 
-public sealed record UploadedSticker(long Id, long AccessHash, byte[] FileReference, string Emoji);
+public sealed record UploadedSticker(long Id, long AccessHash, byte[] FileReference, string Emoji)
+{
+    public override string ToString() => "UploadedSticker [redacted]";
+}
 public sealed record PublicationRecord(long AccountId, string ShortName, UploadedSticker[] Stickers);
 
 /// <summary>Encrypted, account-bound write-once reservation made before a create RPC.</summary>
@@ -34,7 +37,7 @@ public sealed class PublicationJournal(string directory, long accountId, string 
         var path = PathFor(name);
         // Earlier revisions stored unscoped JSON. Never ignore an unresolved old reservation.
         var legacy = Path.Combine(directory, name.ToLowerInvariant() + ".json");
-        return Task.FromResult(File.Exists(path) || File.Exists(legacy));
+        return Task.FromResult(File.Exists(path) || File.Exists(path + ".done") || File.Exists(legacy));
     }
     public FileStream Acquire(string name)
     {
@@ -74,4 +77,35 @@ public sealed class PublicationJournal(string directory, long accountId, string 
         }
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
+    /// <summary>Keep a non-secret tombstone before removing confirmed document references.</summary>
+    public void Complete(string name)
+    {
+        var path = PathFor(name);
+        if (!File.Exists(path)) throw new InvalidOperationException("The publication journal is unavailable.");
+        var done = path + ".done";
+        try
+        {
+            using var marker = new FileStream(done, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.WriteThrough);
+            marker.WriteByte(1); marker.Flush(true);
+        }
+        catch (IOException) when (File.Exists(done)) { }
+        File.Delete(path);
+    }
+    public long? ReadPendingAdd(string name)
+    {
+        var path = PathFor(name) + ".pending";
+        if (!File.Exists(path)) return null;
+        var text = File.ReadAllText(path);
+        if (!long.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) || id <= 0)
+            throw new InvalidDataException("Pending addition state is incomplete; manual reconciliation is required.");
+        return id;
+    }
+    public void MarkPendingAdd(string name, long documentId)
+    {
+        var path = PathFor(name) + ".pending";
+        using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 32, FileOptions.WriteThrough);
+        var bytes = Encoding.ASCII.GetBytes(documentId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        file.Write(bytes); file.Flush(true);
+    }
+    public void ClearPendingAdd(string name) => File.Delete(PathFor(name) + ".pending");
 }

@@ -1,4 +1,5 @@
 using TL;
+using SkiaSharp;
 
 namespace StickerForge.Telegram;
 
@@ -6,11 +7,25 @@ namespace StickerForge.Telegram;
 public sealed class WTelegramStickerApi(TelegramLogin login) : ITelegramStickerApi
 {
     private static InputDocument ToDocument(UploadedSticker sticker) => new() { id = sticker.Id, access_hash = sticker.AccessHash, file_reference = sticker.FileReference };
+    public static DocumentAttribute[] CreateStickerAttributes(byte[] webp, string emoji)
+    {
+        if (!EmojiValidator.IsValid(emoji)) throw new ArgumentException("Each sticker needs 1–20 valid emoji.", nameof(emoji));
+        using var stream = new SKMemoryStream(webp);
+        using var codec = SKCodec.Create(stream) ?? throw new InvalidDataException("Invalid sticker image.");
+        var info = codec.Info;
+        if (codec.EncodedFormat != SKEncodedImageFormat.Webp || codec.FrameCount > 1 || webp.Length > StaticStickerPreparer.MaximumBytes ||
+            info.Width < 1 || info.Height < 1 || Math.Max(info.Width, info.Height) != 512 || Math.Min(info.Width, info.Height) > 512)
+            throw new InvalidDataException("Sticker must be a static WebP up to 512 KiB with one side equal to 512 pixels.");
+        // WTelegramClient represents inputStickerSetEmpty as null; see TL.InputStickerSet documentation.
+        return [new DocumentAttributeSticker { alt = emoji, stickerset = null! }, new DocumentAttributeImageSize { w = info.Width, h = info.Height }, new DocumentAttributeFilename { file_name = "sticker.webp" }];
+    }
 
     public async Task<bool> IsShortNameAvailableAsync(string shortName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var available = await login.Client.Stickers_CheckShortName(shortName);
+        bool available;
+        try { available = await login.Client.Stickers_CheckShortName(shortName); }
+        catch (RpcException ex) when (ex.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) && ex.X >= 0) { throw new TelegramFloodWaitException(ex.X, ex); }
         cancellationToken.ThrowIfCancellationRequested();
         return available;
     }
@@ -18,12 +33,13 @@ public sealed class WTelegramStickerApi(TelegramLogin login) : ITelegramStickerA
     public async Task<UploadedSticker> UploadAsync(byte[] png, string emoji, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var attributes = CreateStickerAttributes(png, emoji);
         using var stream = new MemoryStream(png, writable: false);
         var file = await login.Client.UploadFileAsync(stream, "sticker.webp");
         cancellationToken.ThrowIfCancellationRequested();
         var media = await login.Client.Messages_UploadMedia(new InputPeerSelf(), new InputMediaUploadedDocument
         {
-            file = file, mime_type = "image/webp", attributes = [new DocumentAttributeFilename { file_name = "sticker.webp" }]
+            file = file, mime_type = "image/webp", attributes = attributes
         });
         cancellationToken.ThrowIfCancellationRequested();
         if (media is not MessageMediaDocument { document: Document document }) throw new InvalidDataException("Telegram did not return an uploaded document.");
@@ -41,10 +57,14 @@ public sealed class WTelegramStickerApi(TelegramLogin login) : ITelegramStickerA
     public async Task<RemoteStickerSet> GetSetAsync(string shortName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var result = await login.Client.Messages_GetStickerSet(new InputStickerSetShortName { short_name = shortName }, 0);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (result is not Messages_StickerSet set) throw new InvalidDataException("Telegram did not return the sticker set.");
-        return new RemoteStickerSet(set.set.flags.HasFlag(StickerSet.Flags.creator), set.documents.OfType<Document>().Select(d => d.id).ToArray());
+        try
+        {
+            var result = await login.Client.Messages_GetStickerSet(new InputStickerSetShortName { short_name = shortName }, 0);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result is not Messages_StickerSet set) throw new InvalidDataException("Telegram did not return the sticker set.");
+            return new RemoteStickerSet(set.set.flags.HasFlag(StickerSet.Flags.creator), set.documents.OfType<Document>().Select(d => d.id).ToArray());
+        }
+        catch (RpcException ex) when (ex.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) && ex.X >= 0) { throw new TelegramFloodWaitException(ex.X, ex); }
     }
     public async Task AddStickerAsync(string shortName, UploadedSticker sticker, CancellationToken cancellationToken)
     {

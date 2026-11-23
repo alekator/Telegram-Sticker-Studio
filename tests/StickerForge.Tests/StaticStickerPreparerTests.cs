@@ -21,6 +21,9 @@ public sealed class StaticStickerPreparerTests
             using var output = SKBitmap.Decode(result);
             Assert.Equal(512, output.Width); Assert.Equal(256, output.Height);
             Assert.Equal(0, output.GetPixel(0, 0).Alpha);
+            var attrs = WTelegramStickerApi.CreateStickerAttributes(result, "👩🏽‍💻");
+            var sticker = Assert.Single(attrs.OfType<TL.DocumentAttributeSticker>()); Assert.Equal("👩🏽‍💻", sticker.alt); Assert.Null(sticker.stickerset);
+            var size = Assert.Single(attrs.OfType<TL.DocumentAttributeImageSize>()); Assert.Equal(512, size.w); Assert.Equal(256, size.h);
             Assert.Equal(source, await File.ReadAllBytesAsync(path));
             Assert.InRange(result.Length, 1, StaticStickerPreparer.MaximumBytes);
         }

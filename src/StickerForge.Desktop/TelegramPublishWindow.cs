@@ -45,6 +45,7 @@ internal sealed class TelegramPublishWindow : Window
         panel.Children.Add(loginInput); panel.Children.Add(MakeButton("Continue login", LoginAsync));
         panel.Children.Add(MakeButton("Log out", LogoutAsync));
         panel.Children.Add(new TextBlock { Text = "3. Publish" });
+        panel.Children.Add(MakeButton("Validate files and emoji", ValidateAsync));
         panel.Children.Add(MakeButton("Check name and publish", PublishAsync));
         panel.Children.Add(MakeButton("Recover previous publication", RecoverAsync));
         panel.Children.Add(MakeButton("Cancel operation", () => { operation?.Cancel(); return Task.CompletedTask; }));
@@ -74,6 +75,7 @@ internal sealed class TelegramPublishWindow : Window
         PublicationUncertainException { InnerException: TL.RpcException rpc } when rpc.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) => $"Result uncertain. Wait {rpc.X} seconds, then use Recover; do not create the pack again.",
         PublicationUncertainException { InnerException: TL.RpcException rpc } when rpc.Message.Contains("FILE_REFERENCE", StringComparison.Ordinal) => "An uploaded file reference expired. Automatic recovery stopped; investigate the existing Telegram pack before taking further action.",
         PublicationUncertainException => "The result is uncertain. Use Recover; do not create the pack again.",
+        TelegramFloodWaitException wait => $"Telegram rate limit reached. Wait {wait.Seconds} seconds before retrying.",
         CryptographicException => "The local vault password is incorrect or the vault is damaged.",
         TL.RpcException rpc when rpc.Message.Contains("FLOOD_WAIT", StringComparison.Ordinal) => $"Telegram rate limit reached. Wait {rpc.X} seconds before retrying.",
         TL.RpcException => "Telegram rejected the request. Check the account, code or pack details.",
@@ -121,6 +123,29 @@ internal sealed class TelegramPublishWindow : Window
         message.Text = "Logged out and local session and vault removed.";
     }
     private TelegramPublication Publisher() => new(new WTelegramStickerApi(login ?? throw new InvalidOperationException("Sign in first.")), new PublicationJournal(Path.Combine(dataDir, "publication-journal"), login!.UserId, journalKey ?? throw new InvalidOperationException("Vault is locked.")));
+    private async Task ValidateAsync()
+    {
+        if (stickers.Count is < 1 or > 120) { message.Text = "Import between 1 and 120 static PNG/WebP files."; return; }
+        if (string.IsNullOrWhiteSpace(title.Text) || title.Text.Length > 64) { message.Text = "Enter a pack title with at most 64 characters."; return; }
+        var name = shortName.Text ?? "";
+        if (name.Length is < 1 or > 64 || !char.IsAsciiLetter(name[0]) || name.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_') || name.Contains("__", StringComparison.Ordinal))
+        { message.Text = "Short name must start with a letter and contain only Latin letters, digits and single underscores."; return; }
+        operation = new CancellationTokenSource();
+        try
+        {
+            var preparer = new StaticStickerPreparer(); var count = 0;
+            foreach (var (path, emoji) in stickers)
+            {
+                operation.Token.ThrowIfCancellationRequested();
+                if (!EmojiValidator.IsValid(emoji.Text)) { message.Text = $"{Path.GetFileName(path)}: enter 1–20 valid emoji sequences."; return; }
+                try { await preparer.PrepareAsync(path, operation.Token); }
+                catch (InvalidDataException ex) { message.Text = $"{Path.GetFileName(path)}: {ex.Message}"; return; }
+                count++; progress.Value = (double)count / stickers.Count; message.Text = $"Checking {count}/{stickers.Count}";
+            }
+            message.Text = "Local file and emoji checks passed. Telegram sign-in remains disabled.";
+        }
+        finally { operation.Dispose(); operation = null; }
+    }
     private async Task PublishAsync()
     {
         if (login is null || !loginConfirmed || !login.IsAuthenticated) throw new InvalidOperationException("Sign in to Telegram first.");

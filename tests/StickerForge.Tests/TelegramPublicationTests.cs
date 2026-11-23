@@ -14,14 +14,17 @@ public sealed class TelegramPublicationTests : IDisposable
         public int Uploads, Creates, Adds;
         public long[] ServerIds = [];
         public bool FailAdd;
+        public bool FailAddBeforeServer;
         public bool FailUpload;
+        public int NameFloods, NameChecks;
+        public int WaitSeconds;
         public CancellationTokenSource? CancelAfterUpload;
-        public Task<bool> IsShortNameAvailableAsync(string name, CancellationToken ct) => Task.FromResult(Available);
+        public Task<bool> IsShortNameAvailableAsync(string name, CancellationToken ct) { NameChecks++; if (NameFloods-- > 0) throw new TelegramFloodWaitException(WaitSeconds); return Task.FromResult(Available); }
         public Task<UploadedSticker> UploadAsync(byte[] png, string emoji, CancellationToken ct) { ct.ThrowIfCancellationRequested(); if (FailUpload) throw new IOException("connection lost"); var doc = new UploadedSticker(++Uploads, 42, System.Text.Encoding.UTF8.GetBytes("secret-reference-for-test"), emoji); CancelAfterUpload?.Cancel(); return Task.FromResult(doc); }
         public Task CreateSetAsync(string title, string name, IReadOnlyList<UploadedSticker> stickers, CancellationToken ct)
         { Creates++; ServerIds = stickers.Select(s => s.Id).ToArray(); if (FailCreate) throw new IOException("connection lost"); return Task.CompletedTask; }
         public Task<RemoteStickerSet> GetSetAsync(string name, CancellationToken ct) => Task.FromResult(new RemoteStickerSet(Owned, ServerIds));
-        public Task AddStickerAsync(string name, UploadedSticker sticker, CancellationToken ct) { Adds++; ServerIds = [.. ServerIds, sticker.Id]; if (FailAdd) throw new IOException("connection lost"); return Task.CompletedTask; }
+        public Task AddStickerAsync(string name, UploadedSticker sticker, CancellationToken ct) { Adds++; if (FailAddBeforeServer) throw new IOException("connection lost"); ServerIds = [.. ServerIds, sticker.Id]; if (FailAdd) throw new IOException("connection lost"); return Task.CompletedTask; }
     }
     private static PreparedSticker[] Stickers() => [new([1, 2, 3], "😀"), new([4, 5], "🎉")];
 
@@ -30,6 +33,9 @@ public sealed class TelegramPublicationTests : IDisposable
     {
         var api = new FakeApi(); var result = await Publisher(api).PublishAsync("Pack", "pack_name", Stickers());
         Assert.Equal("https://t.me/addstickers/pack_name", result.ToString()); Assert.Equal(2, api.Uploads); Assert.Equal(1, api.Creates);
+        Assert.Empty(Directory.GetFiles(directory, "*.journal", SearchOption.AllDirectories));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
+        Assert.Equal(1, api.Creates);
     }
     [Fact]
     public async Task DoesNotRetryUncertainCreateOrClaimSuccess()
@@ -38,11 +44,12 @@ public sealed class TelegramPublicationTests : IDisposable
         await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
         await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
         Assert.Equal(1, api.Creates);
-        Assert.Equal("https://t.me/addstickers/pack_name", (await Publisher(api).ReconcileAsync("pack_name")).ToString());
         api.ServerIds = [999];
         await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
         api.ServerIds = [1, 2]; api.Owned = false;
         await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        api.Owned = true;
+        Assert.Equal("https://t.me/addstickers/pack_name", (await Publisher(api).ReconcileAsync("pack_name")).ToString());
     }
     [Fact]
     public async Task RejectsTakenNameAndCancellationBeforeUpload()
@@ -70,13 +77,15 @@ public sealed class TelegramPublicationTests : IDisposable
         await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
         api.ServerIds = [1]; api.FailAdd = true;
         await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        var bytes = await File.ReadAllBytesAsync(Directory.GetFiles(directory, "*.journal", SearchOption.AllDirectories).Single());
+        Assert.DoesNotContain("secret-reference-for-test", System.Text.Encoding.UTF8.GetString(bytes));
+        Assert.DoesNotContain("AccessHash", System.Text.Encoding.UTF8.GetString(bytes));
         api.FailAdd = false;
         Assert.Equal("https://t.me/addstickers/pack_name", (await Publisher(api).ReconcileAsync("pack_name")).ToString());
         Assert.Equal(1, api.Adds); Assert.Equal(new long[] { 1, 2 }, api.ServerIds);
         Assert.False(await new PublicationJournal(directory, 456, Key).ExistsAsync("pack_name"));
-        var bytes = await File.ReadAllBytesAsync(Directory.GetFiles(directory, "*.journal", SearchOption.AllDirectories).Single());
-        Assert.DoesNotContain("secret-reference-for-test", System.Text.Encoding.UTF8.GetString(bytes));
-        Assert.DoesNotContain("AccessHash", System.Text.Encoding.UTF8.GetString(bytes));
+        Assert.Empty(Directory.GetFiles(directory, "*.journal", SearchOption.AllDirectories));
+        Assert.True(await new PublicationJournal(directory, 123, Key).ExistsAsync("pack_name"));
     }
     [Fact]
     public async Task LegacyUnscopedReservationBlocksNewCreate()
@@ -123,5 +132,38 @@ public sealed class TelegramPublicationTests : IDisposable
         var bytes = await File.ReadAllBytesAsync(path); bytes[^1] ^= 1; await File.WriteAllBytesAsync(path, bytes);
         await Assert.ThrowsAnyAsync<System.Security.Cryptography.CryptographicException>(() => Publisher(api).ReconcileAsync("pack_name"));
         Assert.Equal(0, api.Adds);
+    }
+    [Fact]
+    public async Task FloodWaitRetriesReadOnlyOnce()
+    {
+        var api = new FakeApi { NameFloods = 1 };
+        await Publisher(api).PublishAsync("Pack", "pack_name", Stickers());
+        Assert.Equal(2, api.NameChecks); Assert.Equal(1, api.Creates);
+    }
+    [Fact]
+    public async Task RepeatedFloodWaitStopsWithoutUploading()
+    {
+        var api = new FakeApi { NameFloods = 2 };
+        await Assert.ThrowsAsync<TelegramFloodWaitException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
+        Assert.Equal(2, api.NameChecks); Assert.Equal(0, api.Uploads); Assert.Equal(0, api.Creates);
+    }
+    [Fact]
+    public async Task FloodWaitCanBeCancelledWithoutRetry()
+    {
+        using var cancel = new CancellationTokenSource(); cancel.CancelAfter(50);
+        var api = new FakeApi { NameFloods = 1, WaitSeconds = 10 };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers(), cancellationToken: cancel.Token));
+        Assert.Equal(1, api.NameChecks); Assert.Equal(0, api.Uploads); Assert.Equal(0, api.Creates);
+    }
+    [Fact]
+    public async Task UnconfirmedAddAbsentOnServerIsNeverAutomaticallyRepeated()
+    {
+        var api = new FakeApi { FailCreate = true };
+        await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).PublishAsync("Pack", "pack_name", Stickers()));
+        api.ServerIds = [1]; api.FailAddBeforeServer = true;
+        await Assert.ThrowsAsync<PublicationUncertainException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        api.FailAddBeforeServer = false;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Publisher(api).ReconcileAsync("pack_name"));
+        Assert.Equal(1, api.Adds); Assert.Equal(new long[] { 1 }, api.ServerIds);
     }
 }
