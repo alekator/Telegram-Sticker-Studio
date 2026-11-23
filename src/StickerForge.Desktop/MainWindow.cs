@@ -124,6 +124,7 @@ public sealed class MainWindow : Window
         studioTheme.Apply(preferences.Theme == "light");
         importer = new ImageImporter(new SkiaImageDecoder(), ffmpeg);
         Title = "StickerForge Studio";
+        using (var iconStream = AssetLoader.Open(new Uri("avares://StickerForge.Desktop/Assets/StickerForge.ico"))) base.Icon = new WindowIcon(iconStream);
         FontSize = 14;
         Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)), new Setter(BackgroundProperty, studioTheme.Surface), new Setter(ForegroundProperty, studioTheme.Text) } });
         Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
@@ -151,11 +152,6 @@ public sealed class MainWindow : Window
         projectMenu.Items.Add(MenuAction("О программе", ShowAboutAsync));
         StudioLocalization.Capture(projectMenu);
         var top = new DockPanel { LastChildFill = false };
-        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 12, 0) };
-        brand.Children.Add(new Border { Background = studioTheme.Accent, CornerRadius = new CornerRadius(8), Padding = new Thickness(7), Child = Icon("M3 12 L21 4 L16 20 L12 14 Z M12 14 L21 4", 20, Brushes.White) });
-        var brandName = new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center };
-        brand.Children.Add(brandName);
-        DockPanel.SetDock(brand, Dock.Left); top.Children.Add(brand);
         var openAction = ActionButton("M3 7 L9 7 L11 9 L21 9 L19 19 L3 19 Z M3 7 L3 5 L9 5 L11 7", "Открыть", OpenAsync, "Открыть проект"); openAction.Name = "OpenProjectAction";
         var saveAction = ActionButton("M4 3 L18 3 L21 6 L21 21 L3 21 L3 3 Z M7 3 L7 9 L17 9 L17 3 M7 21 L7 14 L17 14 L17 21", "Сохранить", async () => { await SaveAsync(false); }, "Сохранить проект · Ctrl+S"); saveAction.Name = "SaveProjectAction";
         var projectButton = Button("⋯", () => Task.CompletedTask, "Другие действия"); projectButton.Name = "MoreActions";
@@ -166,7 +162,7 @@ public sealed class MainWindow : Window
         packName.VerticalAlignment = VerticalAlignment.Center; DockPanel.SetDock(packName, Dock.Left); top.Children.Add(packName);
         settingsButton = IconButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", ShowSettingsAsync, "Настройки"); settingsButton.Name = "SettingsAction";
         DockPanel.SetDock(settingsButton, Dock.Right); top.Children.Add(settingsButton);
-        void AdaptToolbar() { var compact = ClientSize.Width < 920; brandName.IsVisible = !compact; packName.Width = compact ? 100 : 180; }
+        void AdaptToolbar() { var compact = ClientSize.Width < 920; packName.Width = compact ? 100 : 180; }
         SizeChanged += (_, _) => AdaptToolbar(); AdaptToolbar();
         exportButton = Button("Экспортировать стикеры", ExportAsync, "Подготовить файлы для Telegram");
         exportButton.Background = studioTheme.Accent; exportButton.Foreground = Brushes.White;

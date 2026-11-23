@@ -9,6 +9,8 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
+using Avalonia.Platform;
+using SkiaSharp;
 using StickerForge.Desktop;
 using StickerForge.Infrastructure;
 
@@ -17,6 +19,28 @@ namespace StickerForge.Tests;
 [Collection("Avalonia Headless")]
 public sealed class UiPreferencesTests
 {
+    [Fact]
+    public async Task ApplicationIconContainsAllSizesAndTransparentCorners()
+    {
+        using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+        await session.Dispatch(() =>
+        {
+            using var png = AssetLoader.Open(new Uri("avares://StickerForge.Desktop/Assets/StickerForge.png"));
+            using var bitmap = SKBitmap.Decode(png);
+            Assert.NotNull(bitmap);
+            foreach (var (x, y) in new[] { (0, 0), (bitmap.Width - 1, 0), (0, bitmap.Height - 1), (bitmap.Width - 1, bitmap.Height - 1) }) Assert.Equal((byte)0, bitmap.GetPixel(x, y).Alpha);
+            Assert.Equal((byte)255, bitmap.GetPixel(bitmap.Width / 2, bitmap.Height / 2).Alpha);
+            using var stream = AssetLoader.Open(new Uri("avares://StickerForge.Desktop/Assets/StickerForge.ico"));
+            using var reader = new BinaryReader(stream);
+            Assert.Equal((ushort)0, reader.ReadUInt16()); Assert.Equal((ushort)1, reader.ReadUInt16()); Assert.Equal((ushort)7, reader.ReadUInt16());
+            var sizes = new List<int>();
+            for (var i = 0; i < 7; i++) { var width = reader.ReadByte(); var height = reader.ReadByte(); Assert.Equal(width, height); sizes.Add(width == 0 ? 256 : width); reader.ReadBytes(14); }
+            Assert.Equal(new[] { 16, 24, 32, 48, 64, 128, 256 }, sizes);
+            var window = new MainWindow();
+            try { Assert.NotNull(((Window)window).Icon); }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
     [Fact]
     public async Task EditingSlidersUseThemeColorsAndRemainReadableWhenDisabled()
     {
@@ -272,6 +296,8 @@ public sealed class UiPreferencesTests
                         var save = buttons.Single(x => x.Name == "SaveProjectAction");
                         var more = buttons.Single(x => x.Name == "MoreActions");
                         var settings = buttons.Single(x => x.Name == "SettingsAction");
+                        Assert.DoesNotContain(window.GetVisualDescendants().OfType<TextBlock>(), x => x.IsEffectivelyVisible && x.Text == "StickerForge Studio");
+                        Assert.StartsWith("StickerForge Studio — ", window.Title);
                         Assert.Contains(buttons, x => x.Content is string text && text == (language == "en" ? "＋  Add files" : "＋  Добавить файлы"));
                         Assert.Single(buttons, x => ToolTip.GetTip(x) is string tip && tip == (language == "en" ? "Settings" : "Настройки"));
                         Assert.Equal(language == "en" ? "Open" : "Открыть", ((StackPanel)open.Content!).Children.OfType<TextBlock>().Single().Text);
