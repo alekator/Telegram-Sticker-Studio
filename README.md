@@ -1,5 +1,7 @@
 # StickerForge Studio
 
+> **Telegram integration in progress:** An experimental publishing window, password-protected vault, WebP preparation and MTProto adapter are present. Account-bound recovery can add missing items in automated tests; the complete flow and security have not been verified with Telegram. Sign-in and publication controls remain disabled. Do not use production credentials or merge this draft yet. Video export remains unimplemented. See [current status](docs/TELEGRAM_MANUAL_TEST.md).
+
 > **Новое направление:** StickerForge предназначен для пакетного импорта готовых медиа и подготовки стикерпаков к публикации в Telegram. Графический редактор в этой ветке отсутствует. Прямая публикация, вход в Telegram и экспорт пока не реализованы; их архитектура описана в [плане публикации](docs/TELEGRAM_PUBLICATION_PLAN.md) и [UX-плане](docs/PACK_WORKFLOW_UX.md).
 >
 > Восстановлена основа M1.1 (`47844a8f7304fdcd26160bf5faf88bc71594b66c`). Она открывает только проекты схемы 1; проекты схемы 2 из версии с редактором не открываются. Сохраните их и `.assets`: версия редактора доступна в ветке `archive/graphics-editor`. Автоматической миграции правок нет.
