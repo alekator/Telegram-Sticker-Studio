@@ -47,6 +47,17 @@ public sealed class ProjectTests : IDisposable
     public void NewProjectIsEmpty() => Assert.Empty(new StickerProject().Stickers);
 
     [Fact]
+    public void PanelLayoutRestoresWidthsAndVisibilityAndToleratesDamagedSettings()
+    {
+        var path = Path.Combine(directory, "settings", "panels.json");
+        var store = new PanelLayoutStore(path);
+        store.Save(new PanelLayout(410, 260, false, true));
+        Assert.Equal(new PanelLayout(410, 260, false, true), new PanelLayoutStore(path).Load());
+        File.WriteAllText(path, "{ повреждённый файл");
+        Assert.Equal(new PanelLayout(), store.Load());
+    }
+
+    [Fact]
     public async Task SaveLoadPreservesOrderAndMissingSources()
     {
         var store = new ProjectStore();
