@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace StickerForge.Media;
 
 public sealed record ExportProgress(int Completed, int Total, string FileName);
-public sealed record ExportReport(string Directory, int Exported, IReadOnlyList<string> Errors, bool Cancelled);
+public sealed record ExportReport(string Directory, int Exported, IReadOnlyList<string> Errors, bool Cancelled, IReadOnlyList<string> Successes);
 
 /// <summary>Creates a new folder of Telegram static WebP stickers without modifying source files.</summary>
 public sealed class StickerPackExporter
@@ -28,6 +28,7 @@ public sealed class StickerPackExporter
     private ExportReport Export(IReadOnlyList<StickerItem> sources, string parentDirectory, string packName,
         IProgress<ExportProgress>? progress, CancellationToken token)
     {
+        ExportDiagnostics.Write($"export start count={sources.Count} output={ExportDiagnostics.PathId(parentDirectory)}");
         if (sources.Count == 0) throw new ArgumentException("Add at least one image before exporting.");
         if (!System.IO.Directory.Exists(parentDirectory)) throw new DirectoryNotFoundException("The selected output folder does not exist.");
         token.ThrowIfCancellationRequested();
@@ -35,12 +36,13 @@ public sealed class StickerPackExporter
         string target = Path.Combine(parentDirectory, safeName);
         for (var suffix = 2; System.IO.Directory.Exists(target) || File.Exists(target); suffix++) target = Path.Combine(parentDirectory, $"{safeName} ({suffix})");
         System.IO.Directory.CreateDirectory(target);
-        var errors = new List<string>(); var exported = 0; var cancelled = false;
+        var errors = new List<string>(); var successes = new List<string>(); var exported = 0; var cancelled = false;
         for (var i = 0; i < sources.Count; i++)
         {
             var item = sources[i]; var source = item.SourcePath;
             try
             {
+                ExportDiagnostics.Write($"item {i + 1} input={ExportDiagnostics.PathId(source)} fit={item.Transform.Fit} scale={item.Transform.Scale} rotation={item.Transform.Rotation} x={item.Transform.OffsetX} y={item.Transform.OffsetY} flipX={item.Transform.FlipHorizontal} flipY={item.Transform.FlipVertical} start={item.Transform.StartSeconds} duration={item.Transform.DurationSeconds}");
                 token.ThrowIfCancellationRequested();
                 if (new FileInfo(source).Length > 100 * 1024 * 1024) throw new InvalidDataException("File exceeds 100 MB.");
                 var tiff = ImageImporter.IsTiff(source);
@@ -48,6 +50,13 @@ public sealed class StickerPackExporter
                 var bytes = animated ? ConvertAnimation(source, item.Transform, target, token) : tiff
                     ? ConvertImage(ffmpeg.ReadFrameAsync(source, 0, token).GetAwaiter().GetResult(), item.Transform, token)
                     : ConvertImage(File.ReadAllBytes(source), item.Transform, token);
+                if (!animated)
+                {
+                    using var data = new SKMemoryStream(bytes);
+                    using var encoded = SKCodec.Create(data);
+                    if (encoded is null || encoded.EncodedFormat != SKEncodedImageFormat.Webp || encoded.Info.Width != Size || encoded.Info.Height != Size || bytes.Length > MaxFileBytes)
+                        throw new InvalidDataException("Output verification failed.");
+                }
                 token.ThrowIfCancellationRequested();
                 var destination = Path.Combine(target, $"{i + 1:000}.{(animated ? "webm" : "webp")}");
                 var temporary = Path.Combine(target, $".{Guid.NewGuid():N}.tmp");
@@ -55,16 +64,21 @@ public sealed class StickerPackExporter
                 {
                     using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) output.Write(bytes);
                     token.ThrowIfCancellationRequested();
+                    if (bytes.Length == 0 || !System.Security.Cryptography.SHA256.HashData(bytes).SequenceEqual(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(temporary))))
+                        throw new InvalidDataException("Output verification failed.");
                     File.Move(temporary, destination, false); exported++;
+                    successes.Add($"{Path.GetFileName(source)} → {Path.GetFileName(destination)}");
+                    ExportDiagnostics.Write($"item {i + 1} complete output={ExportDiagnostics.PathId(destination)} bytes={bytes.Length}");
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
             catch (OperationCanceledException) { cancelled = true; break; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception or JsonException or TimeoutException)
-            { errors.Add($"{Path.GetFileName(source)}: {ex.Message}"); }
+            catch (Exception ex)
+            { ExportDiagnostics.Write($"item {i + 1} failed: {ex.ToString().Replace(source, ExportDiagnostics.PathId(source), StringComparison.OrdinalIgnoreCase).Replace(target, ExportDiagnostics.PathId(target), StringComparison.OrdinalIgnoreCase)}"); errors.Add($"{Path.GetFileName(source)}: {ex.Message}"); }
             progress?.Report(new ExportProgress(i + 1, sources.Count, Path.GetFileName(source)));
         }
-        return new ExportReport(target, exported, errors, cancelled);
+        ExportDiagnostics.Write($"export complete success={exported} errors={errors.Count} cancelled={cancelled}");
+        return new ExportReport(target, exported, errors, cancelled, successes);
     }
 
     private byte[] ConvertAnimation(string path, TransformSettings transform, string directory, CancellationToken token)
@@ -118,7 +132,7 @@ public sealed class StickerPackExporter
 
     private byte[] ConvertVideo(string path, TransformSettings transform, string directory, CancellationToken token)
     {
-        var metadata = ffmpeg.ProbeAsync(path, token).GetAwaiter().GetResult();
+        var metadata = ffmpeg.ProbeAsync(path, token, exportDiagnostics: true).GetAwaiter().GetResult();
         var start = Math.Clamp(transform.StartSeconds, 0, Math.Max(0, metadata.DurationSeconds - .05));
         var duration = Math.Min(Math.Clamp(transform.DurationSeconds, .05, 3), metadata.DurationSeconds - start);
         var filter = BuildVideoFilter(metadata, transform, duration);

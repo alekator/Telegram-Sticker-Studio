@@ -42,11 +42,11 @@ public sealed class FfmpegService
         }
     }
 
-    public async Task<VideoMetadata> ProbeAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<VideoMetadata> ProbeAsync(string path, CancellationToken cancellationToken = default, bool exportDiagnostics = false)
     {
         path = Path.GetFullPath(path);
         var output = await RunAsync(ffprobe, ["-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries",
-            "stream=width,height,codec_name,avg_frame_rate,pix_fmt:stream_tags=alpha_mode:format=duration,format_name", "-of", "json", path], 1024 * 1024, cancellationToken);
+            "stream=width,height,codec_name,avg_frame_rate,pix_fmt:stream_tags=alpha_mode:format=duration,format_name", "-of", "json", path], 1024 * 1024, cancellationToken, exportDiagnostics);
         using var doc = JsonDocument.Parse(output);
         var root = doc.RootElement;
         if (!root.TryGetProperty("streams", out var streams) || streams.GetArrayLength() == 0)
@@ -143,14 +143,15 @@ public sealed class FfmpegService
         finally { Processes.Release(); }
     }
 
-    internal Task<byte[]> RunEncoderAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffmpeg, arguments, 1024 * 1024, cancellationToken);
-    internal Task<byte[]> RunProbeAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffprobe, arguments, 1024 * 1024, cancellationToken);
+    internal Task<byte[]> RunEncoderAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffmpeg, arguments, 1024 * 1024, cancellationToken, true);
+    internal Task<byte[]> RunProbeAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffprobe, arguments, 1024 * 1024, cancellationToken, true);
 
-    private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken)
+    private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken, bool exportDiagnostics = false)
     {
         await Processes.WaitAsync(cancellationToken);
         try
         {
+            if (exportDiagnostics) ExportDiagnostics.Write($"process={Path.GetFileName(executable)} arguments={string.Join(" ", arguments.Select(a => Path.IsPathFullyQualified(a) ? ExportDiagnostics.PathId(a) : a))}");
             var start = new ProcessStartInfo(executable) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
             foreach (var argument in arguments) start.ArgumentList.Add(argument);
             using var process = Process.Start(start) ?? throw new IOException("Could not start media process.");
@@ -170,10 +171,26 @@ public sealed class FfmpegService
                 }
                 await process.WaitForExitAsync(timeout.Token);
                 var errors = await stderr;
-                if (process.ExitCode != 0) throw new InvalidDataException($"Media process failed: {errors.Trim()}");
+                if (exportDiagnostics)
+                {
+                    var safeErrors = errors;
+                    foreach (var argument in arguments.Where(Path.IsPathFullyQualified)) safeErrors = safeErrors.Replace(argument, ExportDiagnostics.PathId(argument), StringComparison.OrdinalIgnoreCase);
+                    ExportDiagnostics.Write($"process={Path.GetFileName(executable)} exit={process.ExitCode} stderr={safeErrors.Trim()}");
+                }
+                if (process.ExitCode != 0) throw new InvalidDataException($"Media process failed (exit {process.ExitCode}): {errors.Trim()}");
                 return output.ToArray();
             }
             finally { if (!process.HasExited) process.Kill(true); }
+        }
+        catch (Exception ex)
+        {
+            if (exportDiagnostics)
+            {
+                var safeException = ex.ToString();
+                foreach (var argument in arguments.Where(Path.IsPathFullyQualified)) safeException = safeException.Replace(argument, ExportDiagnostics.PathId(argument), StringComparison.OrdinalIgnoreCase);
+                ExportDiagnostics.Write($"process failure: {safeException}");
+            }
+            throw;
         }
         finally { Processes.Release(); }
     }

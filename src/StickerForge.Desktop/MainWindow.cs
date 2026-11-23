@@ -549,19 +549,21 @@ public sealed class MainWindow : Window
     {
         if (busy) return;
         if (project.Stickers.Count == 0) { status.Text = "Добавьте файлы перед экспортом."; return; }
-        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
-        var path = folders.FirstOrDefault()?.TryGetLocalPath();
-        if (path is null || busy) return;
-        var sources = project.Stickers.ToArray();
-        var name = project.Name;
         busy = true; importing = new CancellationTokenSource();
         try
         {
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
+            var path = folders.FirstOrDefault()?.TryGetLocalPath();
+            if (path is null) return;
+            var sources = project.Stickers.ToArray();
+            var name = project.Name;
             var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = $"Экспорт {p.Completed}/{p.Total}: {p.FileName}"; });
             var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
             status.Text = result.Cancelled ? $"Экспорт отменён. Готово файлов: {result.Exported} из {sources.Length}." : $"Готово файлов: {result.Exported} из {sources.Length}.";
             var lines = new List<string> { status.Text, $"Ошибок: {result.Errors.Count}", $"Папка: {result.Directory}" };
+            if (result.Successes.Count > 0) { lines.Add(""); lines.Add("Подготовлены:"); lines.AddRange(result.Successes); }
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Не удалось подготовить:"); lines.AddRange(result.Errors.Select(ExportError)); }
+            if (result.Errors.Count > 0) { lines.Add(""); lines.Add($"Журнал диагностики: {ExportDiagnostics.LogPath}"); }
             var dialog = new Window { Title = "Результат экспорта", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             var reportPanel = new DockPanel();
             var openFolder = Button("Открыть папку", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Не удалось открыть папку: {ex.Message}"; } return Task.CompletedTask; });
@@ -570,8 +572,11 @@ public sealed class MainWindow : Window
             await dialog.ShowDialog(this);
         }
         catch (OperationCanceledException) { status.Text = "Экспорт отменён."; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
-        { status.Text = $"Ошибка экспорта: {LocalizeError(ex.Message)} Проверьте доступ к выбранной папке и попробуйте другую."; }
+        catch (Exception ex)
+        {
+            ExportDiagnostics.Write($"export failed: {ex}");
+            status.Text = $"Ошибка экспорта: {LocalizeError(ex.Message)} Проверьте исходные файлы и доступ к папке, затем повторите экспорт.";
+        }
         finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
@@ -678,6 +683,10 @@ public sealed class MainWindow : Window
     }
     private static string ExportError(string text)
     {
+        if (text.Contains("Media process failed", StringComparison.Ordinal))
+            return $"{text.Split(':')[0]}: ошибка обработки FFmpeg. Проверьте исходный файл и доступность FFmpeg/FFprobe; подробности записаны в журнал.";
+        if (text.Contains("Video dimensions exceed the limit.", StringComparison.Ordinal))
+            return $"{text.Split(':')[0]}: не удалось прочитать размеры видео или они превышают допустимые. Проверьте файл и попробуйте другой источник.";
         var localized = LocalizeError(text);
         if (text.Contains("Cannot fit this", StringComparison.Ordinal) || text.Contains("File exceeds 100 MB.", StringComparison.Ordinal)) return localized;
         return localized + " Проверьте исходный файл и доступ к нему; для анимации также проверьте наличие FFmpeg и FFprobe.";

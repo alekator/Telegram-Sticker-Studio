@@ -78,6 +78,7 @@ public sealed class StickerPackExporterTests : IDisposable
             using var data = new SKMemoryStream(bytes); using var codec = SKCodec.Create(data);
             Assert.Equal(SKEncodedImageFormat.Webp, codec.EncodedFormat);
             using var output = SKBitmap.Decode(bytes); Assert.Equal(512, output.Width); Assert.Equal(512, output.Height);
+            Console.WriteLine($"{Path.GetExtension(sources[i])}: WEBP {output.Width}x{output.Height}, {bytes.Length} bytes");
             Assert.Equal(0, output.GetPixel(256, 0).Alpha); Assert.True(output.GetPixel(256, 256).Red > 200);
             Assert.Equal(originals[i], await File.ReadAllBytesAsync(sources[i]));
         }
@@ -95,6 +96,27 @@ public sealed class StickerPackExporterTests : IDisposable
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new StickerPackExporter().ExportAsync([source], directory, "cancelled", cancellationToken: cancelled.Token));
         Assert.False(Directory.Exists(Path.Combine(directory, "cancelled")));
+    }
+
+    [Fact]
+    public async Task CorruptInputMustNotAbortBatch()
+    {
+        var bad = Path.Combine(directory, "corrupt.png"); await File.WriteAllTextAsync(bad, "not an image");
+        var good = Image("good.png", SKEncodedImageFormat.Png);
+        var report = await new StickerPackExporter().ExportAsync([bad, good], directory, "partial");
+        Assert.Single(report.Errors); Assert.Equal(1, report.Exported);
+        Assert.False(File.Exists(Path.Combine(report.Directory, "001.webp")));
+        Assert.True(File.Exists(Path.Combine(report.Directory, "002.webp")));
+        Assert.Single(report.Successes);
+        var retry = await new StickerPackExporter().ExportAsync([good], directory, "partial");
+        Assert.Empty(retry.Errors); Assert.Equal(1, retry.Exported);
+    }
+
+    [Fact]
+    public async Task UnavailableOutputFolderIsReported()
+    {
+        var source = Image("folder.png", SKEncodedImageFormat.Png);
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => new StickerPackExporter().ExportAsync([source], Path.Combine(directory, "absent"), "pack"));
     }
 
     [Fact]

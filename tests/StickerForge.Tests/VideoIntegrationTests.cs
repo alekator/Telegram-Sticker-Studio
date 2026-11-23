@@ -77,6 +77,7 @@ public sealed class VideoIntegrationTests
                 var sticker = Path.Combine(exported.Directory, "001.webm");
                 Assert.InRange(new FileInfo(sticker).Length, 1, 256 * 1024);
                 var stickerInfo = await service.ProbeAsync(sticker);
+                Console.WriteLine($"{name}: VP9 {stickerInfo.Width}x{stickerInfo.Height}, {stickerInfo.DurationSeconds:0.###}s, {stickerInfo.FramesPerSecond:0.##} fps, {new FileInfo(sticker).Length} bytes");
                 Assert.Equal("vp9", stickerInfo.Codec); Assert.Equal(512, stickerInfo.Width); Assert.Equal(512, stickerInfo.Height);
                 var decode = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
                 foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-i", sticker, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) decode.ArgumentList.Add(arg);
@@ -116,8 +117,16 @@ public sealed class VideoIntegrationTests
             var makeGif = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true };
             foreach (var arg in new[] { "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=10", "-t", "1", "-y", gif }) makeGif.ArgumentList.Add(arg);
             using var gifGenerator = Process.Start(makeGif)!; var gifErrors = await gifGenerator.StandardError.ReadToEndAsync(); await gifGenerator.WaitForExitAsync(); Assert.True(gifGenerator.ExitCode == 0, gifErrors);
+            foreach (var encoder in new[] { Path.Combine(dir, "missing-ffmpeg"), "ffprobe" })
+            {
+                var failed = await new StickerPackExporter(new FfmpegService(encoder, "ffprobe")).ExportAsync([gif], dir, "failed-encoder");
+                Assert.Equal(0, failed.Exported); Assert.Single(failed.Errors); Assert.Empty(failed.Successes);
+                Assert.False(File.Exists(Path.Combine(failed.Directory, "001.webm")));
+            }
             var gifReport = await new StickerPackExporter().ExportAsync([gif], dir, "gif-pack");
             Assert.True(gifReport.Errors.Count == 0, string.Join("; ", gifReport.Errors)); Assert.Equal(1, gifReport.Exported);
+            var gifOutput = Path.Combine(gifReport.Directory, "001.webm"); var gifOutputInfo = await new FfmpegService().ProbeAsync(gifOutput);
+            Console.WriteLine($"GIF: VP9 {gifOutputInfo.Width}x{gifOutputInfo.Height}, {gifOutputInfo.DurationSeconds:0.###}s, {gifOutputInfo.FramesPerSecond:0.##} fps, {new FileInfo(gifOutput).Length} bytes");
             var gifService = new FfmpegService(); var gifMetadata = await gifService.ProbeAsync(gif);
             using (var gifPreview = SKBitmap.Decode(await gifService.ReadTransformedFrameAsync(gif, gifMetadata, 0, new TransformSettings { Fit = FitMode.Manual, Scale = 1.2, Rotation = 20 })))
             { Assert.NotNull(gifPreview); Assert.Equal(512, gifPreview.Width); Assert.Equal(512, gifPreview.Height); }
@@ -152,6 +161,16 @@ public sealed class VideoIntegrationTests
             var mixed = await new StickerPackExporter().ExportAsync([tiff, gif, Path.Combine(dir, "sample.mp4")], dir, "mixed");
             Assert.True(mixed.Errors.Count == 0, string.Join("; ", mixed.Errors)); Assert.Equal(3, mixed.Exported);
             Assert.True(File.Exists(Path.Combine(mixed.Directory, "001.webp"))); Assert.True(File.Exists(Path.Combine(mixed.Directory, "002.webm"))); Assert.True(File.Exists(Path.Combine(mixed.Directory, "003.webm")));
+            var pngPath = Path.Combine(dir, "mixed.png"); var jpgPath = Path.Combine(dir, "mixed.jpg");
+            using (var bitmap = new SKBitmap(64, 48)) using (var still = SKImage.FromBitmap(bitmap))
+            using (var png = still.Encode(SKEncodedImageFormat.Png, 100)) using (var jpg = still.Encode(SKEncodedImageFormat.Jpeg, 100))
+            { File.WriteAllBytes(pngPath, png.ToArray()); File.WriteAllBytes(jpgPath, jpg.ToArray()); }
+            var transform = new TransformSettings { Fit = FitMode.Fill, Scale = .8, OffsetX = 20, OffsetY = -15, Rotation = 30, FlipHorizontal = true, FlipVertical = true, StartSeconds = .1, DurationSeconds = .6 };
+            var sources = new[] { pngPath, jpgPath, gif, Path.Combine(dir, "sample.mp4") }.Select(p => new StickerItem { SourcePath = p, Transform = transform }).ToArray();
+            var mixedTransformed = await new StickerPackExporter().ExportAsync(sources, dir, "mixed-transformed");
+            Assert.Empty(mixedTransformed.Errors); Assert.Equal(4, mixedTransformed.Exported); Assert.Equal(4, mixedTransformed.Successes.Count);
+            foreach (var (index, ext) in new[] { (1, "webp"), (2, "webp"), (3, "webm"), (4, "webm") })
+                Assert.True(File.Exists(Path.Combine(mixedTransformed.Directory, $"{index:000}.{ext}")));
         }
         finally { Directory.Delete(dir, true); }
     }
