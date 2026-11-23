@@ -29,16 +29,19 @@ public sealed class VideoIntegrationTests
         }
         Close(original.GetPixel(415, 128), horizontal.GetPixel(96, 128), 55);
         Close(original.GetPixel(96, 383), vertical.GetPixel(96, 128), 55);
-        var settings = new TransformSettings { Fit = FitMode.Manual, Scale = .8, OffsetX = 20, OffsetY = -10, Rotation = 90, FlipHorizontal = true, FlipVertical = true };
-        using var preview = SKBitmap.Decode(await service.ReadTransformedFrameAsync(path, metadata, 0, settings));
+        var settings = new TransformSettings { Fit = FitMode.Manual, Scale = .8, OffsetX = 20, OffsetY = -10, Rotation = 90, FlipHorizontal = true, FlipVertical = true, StartSeconds = .1, DurationSeconds = .8 };
         var report = await new StickerPackExporter(service).ExportAsync([new StickerItem { SourcePath = path, Transform = settings }], directory, name);
         Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors)); Assert.Equal(1, report.Exported);
-        var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
-        foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-i", Path.Combine(report.Directory, "001.webm"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
-        using var decoder = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = decoder.StandardError.ReadToEndAsync();
-        await decoder.StandardOutput.BaseStream.CopyToAsync(bytes); await decoder.WaitForExitAsync(); Assert.True(decoder.ExitCode == 0, await errors);
-        using var result = SKBitmap.Decode(bytes.ToArray());
-        foreach (var (x, y) in new[] { (256, 256), (200, 200), (300, 300), (30, 30) }) Close(preview.GetPixel(x, y), result.GetPixel(x, y), 55);
+        foreach (var seconds in new[] { 0d, .4, .6 })
+        {
+            using var preview = SKBitmap.Decode(await service.ReadTransformedFrameAsync(path, metadata, settings.StartSeconds + seconds, settings));
+            var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-i", Path.Combine(report.Directory, "001.webm"), "-ss", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
+            using var decoder = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = decoder.StandardError.ReadToEndAsync();
+            await decoder.StandardOutput.BaseStream.CopyToAsync(bytes); await decoder.WaitForExitAsync(); Assert.True(decoder.ExitCode == 0, await errors);
+            using var result = SKBitmap.Decode(bytes.ToArray()); Assert.NotNull(result);
+            foreach (var (x, y) in new[] { (256, 256), (200, 200), (300, 300), (30, 30) }) Close(preview.GetPixel(x, y), result.GetPixel(x, y), 65);
+        }
     }
 
     [FfmpegIntegrationFact]

@@ -391,7 +391,7 @@ public sealed class MainWindow : Window
         }
         slider.PropertyChanged += (_, e) =>
         {
-            if (e.Property == RangeBase.ValueProperty && !input.IsKeyboardFocusWithin) Refresh();
+            if (e.Property == RangeBase.ValueProperty) Refresh();
         };
         input.LostFocus += (_, _) => Commit();
         input.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
@@ -561,7 +561,7 @@ public sealed class MainWindow : Window
             var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
             status.Text = result.Cancelled ? $"Экспорт отменён. Готово файлов: {result.Exported} из {sources.Length}." : $"Готово файлов: {result.Exported} из {sources.Length}.";
             var lines = new List<string> { status.Text, $"Ошибок: {result.Errors.Count}", $"Папка: {result.Directory}" };
-            if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Не удалось подготовить:"); lines.AddRange(result.Errors.Select(LocalizeError)); }
+            if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Не удалось подготовить:"); lines.AddRange(result.Errors.Select(ExportError)); }
             var dialog = new Window { Title = "Результат экспорта", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
             var reportPanel = new DockPanel();
             var openFolder = Button("Открыть папку", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Не удалось открыть папку: {ex.Message}"; } return Task.CompletedTask; });
@@ -571,7 +571,7 @@ public sealed class MainWindow : Window
         }
         catch (OperationCanceledException) { status.Text = "Экспорт отменён."; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
-        { status.Text = $"Ошибка экспорта: {ex.Message}"; }
+        { status.Text = $"Ошибка экспорта: {LocalizeError(ex.Message)} Проверьте доступ к выбранной папке и попробуйте другую."; }
         finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
@@ -659,7 +659,7 @@ public sealed class MainWindow : Window
     private static string LocalizeError(string text)
     {
         foreach (var (english, russian) in new[] {
-            ("File exceeds 100 MB.", "Размер файла превышает 100 МБ."),
+            ("File exceeds 100 MB.", "Размер файла превышает 100 МБ. Уменьшите исходный файл."),
             ("Unsupported or corrupt image.", "Формат не поддерживается или файл повреждён."),
             ("Unsupported or damaged image.", "Формат не поддерживается или файл повреждён."),
             ("Image dimensions exceed the limit.", "Размер изображения превышает допустимый."),
@@ -667,7 +667,7 @@ public sealed class MainWindow : Window
             ("Animation exceeds the frame limit.", "В анимации слишком много кадров."),
             ("GIF exceeds the frame limit.", "В GIF слишком много кадров."),
             ("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.", "Не удалось уменьшить анимацию до 256 КиБ. Выберите более короткий или простой фрагмент."),
-            ("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.", "Не удалось уменьшить изображение до 512 КиБ."),
+            ("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.", "Не удалось уменьшить изображение до 512 КиБ. Попробуйте изображение с меньшим количеством деталей."),
             ("Encoded video failed format validation.", "Полученное видео не прошло проверку формата."),
             ("Encoded video duration is invalid.", "Длительность полученного видео недопустима."),
             ("FFmpeg and FFprobe are unavailable; configure them to import video.", "Для импорта видео нужны FFmpeg и FFprobe."),
@@ -675,6 +675,12 @@ public sealed class MainWindow : Window
             ("Media process failed:", "Ошибка обработки медиа:"),
             ("Video duration is unavailable.", "Не удалось определить длительность видео.") }) text = text.Replace(english, russian, StringComparison.Ordinal);
         return text;
+    }
+    private static string ExportError(string text)
+    {
+        var localized = LocalizeError(text);
+        if (text.Contains("Cannot fit this", StringComparison.Ordinal) || text.Contains("File exceeds 100 MB.", StringComparison.Ordinal)) return localized;
+        return localized + " Проверьте исходный файл и доступ к нему; для анимации также проверьте наличие FFmpeg и FFprobe.";
     }
     private static string SourceFormat(ImageInfo? info, string path)
     {
@@ -798,6 +804,7 @@ public sealed class MainWindow : Window
     }
     private async Task SelectAsync()
     {
+        if (status.Text?.StartsWith("Предпросмотр GIF:", StringComparison.Ordinal) == true) status.Text = "Готово";
         ClearVideo();
         StopGif();
         animationBar.IsVisible = false;
@@ -828,7 +835,7 @@ public sealed class MainWindow : Window
             {
                 try { previewVideo = await ffmpeg.ProbeAsync(item.SourcePath); }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or System.ComponentModel.Win32Exception or TimeoutException or System.Text.Json.JsonException)
-                { status.Text = "Предпросмотр GIF работает без FFmpeg; вид экспортированного файла может немного отличаться."; }
+                { if (generation == previewGeneration) status.Text = $"Предпросмотр GIF: не удалось прочитать видео FFprobe ({LocalizeError(ex.Message)}). Используется резервный просмотр; проверьте файл и FFprobe."; }
             }
             if (generation != previewGeneration) return;
             if (previewVideo is not null && info.Video is null) { animationDuration = previewVideo.DurationSeconds; ConfigureFragment(item.Transform); }

@@ -32,6 +32,19 @@ public sealed class ProjectTests : IDisposable
     }
 
     [Fact]
+    public async Task AnimatedItemsKeepIndependentTransformsAndFragments()
+    {
+        var path = Path.Combine(directory, "animated.json");
+        var first = new TransformSettings { Fit = FitMode.Fill, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, FlipHorizontal = true, StartSeconds = .4, DurationSeconds = 1.2 };
+        var second = new TransformSettings { Fit = FitMode.Manual, Scale = .7, OffsetX = -15, OffsetY = 35, Rotation = -90, FlipVertical = true, StartSeconds = 2.1, DurationSeconds = .8 };
+        var store = new ProjectStore();
+        await store.SaveAsync(new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "a.gif"), Transform = first }, new() { SourcePath = Path.Combine(directory, "b.mp4"), Transform = second }] }, path);
+        var loaded = await store.LoadAsync(path);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(first), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[0].Transform));
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(second), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[1].Transform));
+    }
+
+    [Fact]
     public async Task ExistingProjectWithoutReflectionSettingsKeepsOriginalOrientation()
     {
         var path = Path.Combine(directory, "old.json");

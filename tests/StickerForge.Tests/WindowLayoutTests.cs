@@ -47,6 +47,8 @@ public sealed class WindowLayoutTests
                     var emptyProperties = (TextBlock)typeof(MainWindow).GetField("emptyProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var editing = (StackPanel)typeof(MainWindow).GetField("editingProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var export = (Button)typeof(MainWindow).GetField("exportButton", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    Assert.Equal(14, window.FontSize); Assert.True(window.RenderScaling > 0);
+                    Assert.Equal(14, window.GetVisualDescendants().OfType<MenuItem>().First().FontSize);
                     Assert.True(emptyCanvas.IsVisible); Assert.True(emptyProperties.IsVisible); Assert.False(editing.IsVisible); Assert.False(export.IsEnabled);
                     void CheckCanvasFits()
                     {
@@ -73,7 +75,7 @@ public sealed class WindowLayoutTests
                     var inputs = editing.GetVisualDescendants().OfType<TextBox>().ToArray();
                     Assert.Equal(4, inputs.Length);
                     foreach (var input in inputs)
-                    { Assert.InRange(input.Bounds.Width, 99, 101); Assert.InRange(input.Bounds.Height, 33, 35); }
+                    { Assert.InRange(input.Bounds.Width, 99, 101); Assert.InRange(input.Bounds.Height, 33, 35); Assert.Equal(14, input.FontSize); }
                     var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var transformBefore = JsonSerializer.Serialize(project.Stickers[0].Transform);
                     typeof(MainWindow).GetMethod("ActualPreviewSize", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null); await Task.Delay(100); CheckCanvasFits();
@@ -103,6 +105,42 @@ public sealed class WindowLayoutTests
                     Assert.False(new PanelLayoutStore(path).Load().GalleryVisible);
                 }
                 finally { if (window.IsVisible) { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); } }
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task SwitchingStickerLoadsItsOwnSettingsEvenWithFocusedInput()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-selection-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(async () =>
+            {
+                var paths = new[] { Path.Combine(directory, "a.png"), Path.Combine(directory, "b.png") };
+                using (var bitmap = new SKBitmap(32, 24)) using (var image = SKImage.FromBitmap(bitmap)) using (var png = image.Encode(SKEncodedImageFormat.Png, 100))
+                    foreach (var path in paths) File.WriteAllBytes(path, png.ToArray());
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "layout.json"))); window.Show();
+                try
+                {
+                    await (Task)typeof(MainWindow).GetMethod("ImportAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [paths])!;
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    project.Stickers[0].Transform.Scale = 1.5; project.Stickers[0].Transform.Rotation = 45;
+                    project.Stickers[1].Transform.Scale = .7; project.Stickers[1].Transform.Rotation = -90;
+                    var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    gallery.SelectedIndex = 0; await Task.Delay(100);
+                    var editing = (StackPanel)typeof(MainWindow).GetField("editingProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var input = editing.GetVisualDescendants().OfType<TextBox>().First();
+                    Assert.Equal("150", input.Text); input.Focus();
+                    gallery.SelectedIndex = 1; await Task.Delay(100);
+                    Assert.Equal("70", input.Text);
+                    Assert.Equal(1.5, project.Stickers[0].Transform.Scale); Assert.Equal(45, project.Stickers[0].Transform.Rotation);
+                    Assert.Equal(.7, project.Stickers[1].Transform.Scale); Assert.Equal(-90, project.Stickers[1].Transform.Rotation);
+                }
+                finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
             }, CancellationToken.None);
         }
         finally { Directory.Delete(directory, true); }
