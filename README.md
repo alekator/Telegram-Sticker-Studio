@@ -1,18 +1,84 @@
-# StickerForge Studio
+<p align="center"><img src="src/StickerForge.Desktop/Assets/StickerForge.png" alt="StickerForge Studio logo" width="150"></p>
 
-Локальное настольное приложение для подготовки готовых изображений и анимаций к ручной загрузке в Telegram. Импортируйте файлы или папку, расположите стикеры в нужном порядке, настройте кадрирование и выберите **Экспортировать стикеры**. Сохранение проекта необязательно.
+<h1 align="center">StickerForge Studio</h1>
+<p align="center"><strong>Create Telegram stickers. Simply.</strong></p>
+<p align="center">English · <a href="README.ru.md">Русский</a></p>
+<p align="center">
+  <a href="https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/ci.yml"><img src="https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/ci.yml/badge.svg" alt="Build and test"></a>
+  <img src="https://img.shields.io/badge/version-development-318cf4" alt="Version: development">
+  <img src="https://img.shields.io/badge/platform-Windows%20x64-318cf4" alt="Windows x64">
+</p>
 
-Статические изображения экспортируются в WebP до 512 КиБ, анимация и видео — в VP9 WebM без звука, до трёх секунд и 256 КиБ. Результат помещается на прозрачный холст 512×512. При необходимости качество уменьшается; если уложиться в ограничение не удалось, ошибка попадает в отчёт. Оригиналы не изменяются. Экспорт создаёт новую папку; номера файлов отражают порядок галереи. Поддерживаются отмена и отчёт об ошибках.
+## Overview
 
-Набор сначала обрабатывается во временной папке. Итоговая папка создаётся только после успешной проверки всех файлов; при ошибке или отмене предыдущие результаты не изменяются. Для видео проверяются параметры, временные метки, полное декодирование и покадровые показатели прозрачности. Сравнение прозрачности использует минимум и среднее значение альфа-канала каждого кадра и не является попиксельной проверкой совпадения маски.
+**StickerForge Studio — Create Telegram stickers. Simply.**
 
-Для публикации откройте в Telegram мини-приложение @Stickers, создайте статический набор, загрузите экспортированные файлы и назначьте эмодзи. Приложение само не обращается к Telegram и не требует аккаунта. Информация об ограничениях: https://core.telegram.org/import-stickers.
+A free, offline desktop application for turning images, GIFs, and videos into Telegram-ready stickers. Import your media, adjust your stickers, preview the results, and export an entire sticker pack in just a few clicks.
 
-Поддерживаются PNG, JPEG, WebP, BMP, TIFF, GIF, APNG и распространённые видеоформаты при наличии соответствующих декодеров. Многокадровый WebP обрабатывается покадрово. Порядок и параметры преобразования сохраняются в проекте. Анимационный предпросмотр GIF и WebP пока не использует тот же фильтр, что экспорт видео; результат следует дополнительно проверить.
+## Features
 
-Для проверки Windows x64 workflow `Windows standalone package` формирует ZIP. Распакуйте архив целиком и запустите `StickerForge.Desktop.exe`: в пакете находятся .NET runtime и проверенные FFmpeg/FFprobe, PATH не требуется. Сборка предназначена для ручной проверки: полный инвентарь лицензий статически связанных компонентов FFmpeg ещё не подтверждён; подробности в `THIRD-PARTY-NOTICES.md` внутри архива. Для запуска из исходников могут понадобиться системные FFmpeg и FFprobe.
+- Free to use, fully offline, with no accounts, registration, ads, or subscriptions.
+- Import files or folders in batches, reorder the gallery, and apply settings to a selection.
+- Fit, fill, stretch, or manually adjust each sticker; scale, move, rotate, and flip it.
+- Preview changes as you work and choose an animation segment of up to three seconds.
+- Export static WebP and VP9 WebM video stickers, with automatic Telegram format validation.
+- Save projects with their sticker order and individual adjustments. Source files are not modified.
+- Choose English or Russian, and a dark, light, or system theme.
 
-Для разработки требуется .NET 10 SDK. Первое восстановление пакетов требует доступа к NuGet; работа собранного приложения и преобразование файлов происходят локально.
+Export is local: StickerForge does not sign in to Telegram or publish packs. Upload the finished files to Telegram yourself.
+
+## Screenshots
+
+Captured from the current application in English using the included logo as sample media.
+
+<details open><summary>Dark theme</summary>
+
+![StickerForge Studio in dark theme](docs/screenshot-dark.png)
+
+</details>
+
+<details><summary>Light theme</summary>
+
+![StickerForge Studio in light theme](docs/screenshot-light.png)
+
+</details>
+
+## Download
+
+### [Download a Windows x64 build from GitHub Actions](https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/windows-package.yml)
+
+Open a successful **Windows standalone package** run and download the `StickerForge-Studio-Windows-x64` artifact. GitHub may require you to sign in, and workflow artifacts expire. The artifact contains `StickerForge-Studio-Windows-x64.zip`; extract it, then open the `StickerForge-Studio` folder.
+
+**Distribution status:** these are evaluation builds, not a public release. The package includes FFmpeg and its notices, but the full license inventory and relinking materials for the pinned FFmpeg build have not yet been verified. See [Windows distribution notes](docs/WINDOWS-DISTRIBUTION.md). No permanent GitHub Release has been published.
+
+## Getting Started
+
+1. Download and extract the complete ZIP. Keep the files and `tools` folder together.
+2. Double-click `StickerForge.Desktop.exe`. The Windows package includes the .NET runtime, FFmpeg, and FFprobe; no installation or PATH configuration is required.
+3. Choose **Add files** or drag media into the window. Select a sticker and adjust its placement, scale, position, rotation, and flip.
+4. For animation or video, select the desired fragment. Preview the result and use **Save** if you want to reopen the project later.
+5. Choose **Export stickers** and a destination folder. The app checks the resulting files and reports any errors.
+
+## Supported Formats
+
+| Input | Export |
+| --- | --- |
+| PNG, JPEG, static WebP, BMP, TIFF | Static WebP |
+| GIF, APNG, animated WebP, MP4, MOV, MKV, WebM, AVI | VP9 WebM video sticker |
+
+Supported codecs inside video containers depend on the bundled FFmpeg build. Output uses a transparent 512 × 512 canvas. Static WebP is limited to 512 KiB; video WebM is silent, at most three seconds and 256 KiB. If a file cannot fit the constraints, export reports an error instead of producing an invalid pack.
+
+Animation preview for GIF and animated WebP can use a fallback path that differs from video export; inspect the exported result when exact frame-by-frame matching matters. The entire pack is staged and the final folder is created only after all files pass validation.
+
+## System Requirements
+
+- Windows x64. The packaged build has been exercised on Windows; Windows 10/11 compatibility depends on the supported versions of [.NET](https://learn.microsoft.com/en-us/dotnet/core/install/windows) and [Avalonia](https://docs.avaloniaui.net/docs/supported-platforms).
+- Disk space for the extracted application, source media, and exported stickers.
+- No separately installed .NET runtime, SDK, FFmpeg, or FFprobe is required for the packaged build.
+
+## Build from Source
+
+Install the .NET 10 SDK (the Windows packaging workflow uses 10.0.110) and restore packages from NuGet:
 
 ```sh
 dotnet restore StickerForge.sln
@@ -21,4 +87,18 @@ dotnet test StickerForge.sln -c Release --no-build --no-restore
 dotnet run --project src/StickerForge.Desktop/StickerForge.Desktop.csproj -c Release
 ```
 
-После изменения направления проекты схемы 2 из архивной версии с графическим редактором не открываются; используйте ветку `archive/graphics-editor` и сохраняйте её `.assets`. Текущая версия поддерживает проекты M1.1 схемы 1. Публичный релиз и собранные установщики пока не подготовлены.
+Video import and export from a source build require FFmpeg and FFprobe. The Windows packaging workflow retrieves a pinned archive and checks its SHA-256 before publishing a self-contained app. See [distribution notes](docs/WINDOWS-DISTRIBUTION.md) and [the packaging script](eng/package-windows.ps1).
+
+## Technology Stack
+
+- C# and .NET 10
+- Avalonia UI and Fluent theme
+- SkiaSharp for image decoding and rendering
+- FFmpeg and FFprobe for video and animation processing
+- xUnit and GitHub Actions for automated checks
+
+## License & Third-Party Components
+
+No license for the StickerForge Studio source code has been specified in this repository. Do not assume a source-code license from the fact that the application is free to use.
+
+The Windows package contains .NET, Avalonia, SkiaSharp, FFmpeg, libvpx, and other components under their respective licenses. FFmpeg is distributed under LGPL terms in the selected build; its source and additional notices are linked in the [Windows distribution notes](docs/WINDOWS-DISTRIBUTION.md). The complete inventory and relinking materials for the pinned FFmpeg binary remain to be verified before a public release. See also [dependency and licensing notes](docs/LICENSING.md).
