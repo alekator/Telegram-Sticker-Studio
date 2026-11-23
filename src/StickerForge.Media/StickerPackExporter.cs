@@ -1,4 +1,7 @@
 using SkiaSharp;
+using StickerForge.Core;
+using System.Globalization;
+using System.Text.Json;
 
 namespace StickerForge.Media;
 
@@ -8,15 +11,21 @@ public sealed record ExportReport(string Directory, int Exported, IReadOnlyList<
 /// <summary>Creates a new folder of Telegram static WebP stickers without modifying source files.</summary>
 public sealed class StickerPackExporter
 {
+    private readonly FfmpegService ffmpeg;
+    public StickerPackExporter(FfmpegService? ffmpeg = null) => this.ffmpeg = ffmpeg ?? FfmpegLocator.CreateDefault();
     public const int MaxFileBytes = 512 * 1024;
     private const int Size = 512;
     private const long MaxPixels = 40_000_000;
 
     public Task<ExportReport> ExportAsync(IReadOnlyList<string> sources, string parentDirectory, string packName,
         IProgress<ExportProgress>? progress = null, CancellationToken cancellationToken = default) =>
-        Task.Run(() => Export(sources, parentDirectory, packName, progress, cancellationToken), CancellationToken.None);
+        ExportAsync(sources.Select(s => new StickerItem { SourcePath = s }).ToArray(), parentDirectory, packName, progress, cancellationToken);
 
-    private static ExportReport Export(IReadOnlyList<string> sources, string parentDirectory, string packName,
+    public Task<ExportReport> ExportAsync(IReadOnlyList<StickerItem> items, string parentDirectory, string packName,
+        IProgress<ExportProgress>? progress = null, CancellationToken cancellationToken = default) =>
+        Task.Run(() => Export(items, parentDirectory, packName, progress, cancellationToken), CancellationToken.None);
+
+    private ExportReport Export(IReadOnlyList<StickerItem> sources, string parentDirectory, string packName,
         IProgress<ExportProgress>? progress, CancellationToken token)
     {
         if (sources.Count == 0) throw new ArgumentException("Add at least one image before exporting.");
@@ -29,13 +38,18 @@ public sealed class StickerPackExporter
         var errors = new List<string>(); var exported = 0; var cancelled = false;
         for (var i = 0; i < sources.Count; i++)
         {
-            var source = sources[i];
+            var item = sources[i]; var source = item.SourcePath;
             try
             {
                 token.ThrowIfCancellationRequested();
-                var bytes = ConvertImage(source, token);
+                if (new FileInfo(source).Length > 100 * 1024 * 1024) throw new InvalidDataException("File exceeds 100 MB.");
+                var tiff = ImageImporter.IsTiff(source);
+                var animated = !tiff && IsAnimated(source);
+                var bytes = animated ? ConvertAnimation(source, item.Transform, target, token) : tiff
+                    ? ConvertImage(ffmpeg.ReadFrameAsync(source, 0, token).GetAwaiter().GetResult(), item.Transform, token)
+                    : ConvertImage(File.ReadAllBytes(source), item.Transform, token);
                 token.ThrowIfCancellationRequested();
-                var destination = Path.Combine(target, $"{i + 1:000}.webp");
+                var destination = Path.Combine(target, $"{i + 1:000}.{(animated ? "webm" : "webp")}");
                 var temporary = Path.Combine(target, $".{Guid.NewGuid():N}.tmp");
                 try
                 {
@@ -46,33 +60,110 @@ public sealed class StickerPackExporter
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
             catch (OperationCanceledException) { cancelled = true; break; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception or JsonException or TimeoutException)
             { errors.Add($"{Path.GetFileName(source)}: {ex.Message}"); }
             progress?.Report(new ExportProgress(i + 1, sources.Count, Path.GetFileName(source)));
         }
         return new ExportReport(target, exported, errors, cancelled);
     }
 
-    private static byte[] ConvertImage(string path, CancellationToken token)
+    private byte[] ConvertAnimation(string path, TransformSettings transform, string directory, CancellationToken token)
     {
+        using var input = File.OpenRead(path);
+        using var codec = SKCodec.Create(input);
+        if (codec is null || codec.EncodedFormat != SKEncodedImageFormat.Webp || codec.FrameCount <= 1)
+            return ConvertVideo(path, transform, directory, token);
+        if (codec.FrameCount > 1000) throw new InvalidDataException("Animation exceeds the frame limit.");
+        var work = Path.Combine(directory, ".frames-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try
+        {
+            var manifest = Path.Combine(work, "frames.txt");
+            var lines = new List<string> { "ffconcat version 1.0" };
+            var durations = codec.FrameInfo.Select(f => Math.Max(20, f.Duration)).ToArray();
+            var startMs = Math.Clamp(transform.StartSeconds * 1000, 0, Math.Max(0, durations.Sum() - 20));
+            var startIndex = 0; var frameStart = 0;
+            while (startIndex < durations.Length - 1 && frameStart + durations[startIndex] <= startMs) frameStart += durations[startIndex++];
+            var stopMs = startMs + Math.Clamp(transform.DurationSeconds, .05, 3) * 1000;
+            var endIndex = startIndex; var endTime = frameStart;
+            while (endIndex < durations.Length && endTime < stopMs) endTime += durations[endIndex++];
+            for (var i = startIndex; i < endIndex; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                var frameName = $"{i:0000}.png";
+                File.WriteAllBytes(Path.Combine(work, frameName), GifFrameReader.ReadFrame(path, i, token));
+                lines.Add($"file '{frameName}'");
+                lines.Add("duration " + (durations[i] / 1000d).ToString("0.########", CultureInfo.InvariantCulture));
+            }
+            lines.Add($"file '{endIndex - 1:0000}.png'");
+            File.WriteAllLines(manifest, lines);
+            var intermediate = Path.Combine(work, "animation.png");
+            ffmpeg.RunEncoderAsync(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", manifest,
+                "-t", ((endTime - frameStart) / 1000d).ToString("0.########", CultureInfo.InvariantCulture), "-plays", "1", "-f", "apng", intermediate], token).GetAwaiter().GetResult();
+            var settings = new TransformSettings { Fit = transform.Fit, Scale = transform.Scale, OffsetX = transform.OffsetX, OffsetY = transform.OffsetY,
+                Rotation = transform.Rotation, StartSeconds = (startMs - frameStart) / 1000, DurationSeconds = transform.DurationSeconds };
+            return ConvertVideo(intermediate, settings, directory, token);
+        }
+        finally { Directory.Delete(work, true); }
+    }
+
+    private static bool IsAnimated(string path)
+    {
+        if (AnimatedPng.Duration(path) is not null) return true;
         using var stream = File.OpenRead(path);
+        using var codec = SKCodec.Create(stream);
+        return codec is null || codec.FrameCount > 1;
+    }
+
+    private byte[] ConvertVideo(string path, TransformSettings transform, string directory, CancellationToken token)
+    {
+        var metadata = ffmpeg.ProbeAsync(path, token).GetAwaiter().GetResult();
+        var start = Math.Clamp(transform.StartSeconds, 0, Math.Max(0, metadata.DurationSeconds - .05));
+        var duration = Math.Min(Math.Clamp(transform.DurationSeconds, .05, 3), metadata.DurationSeconds - start);
+        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
+        var sx = 512d / metadata.Width; var sy = 512d / metadata.Height;
+        if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
+        var scale = Math.Clamp(transform.Scale, .1, 10);
+        var width = Math.Clamp((int)Math.Round(metadata.Width * sx * scale), 1, 5120);
+        var height = Math.Clamp((int)Math.Round(metadata.Height * sy * scale), 1, 5120);
+        static string N(double n) => n.ToString("0.########", CultureInfo.InvariantCulture);
+        var filter = $"[0:v]fps={N(fps)},format=rgba,scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
+        var temp = Path.Combine(directory, $".{Guid.NewGuid():N}.webm");
+        try
+        {
+            foreach (var crf in new[] { 20, 28, 36, 44, 52, 60, 63 })
+            {
+                token.ThrowIfCancellationRequested();
+                ffmpeg.RunEncoderAsync(["-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", Path.GetFullPath(path), "-t", N(duration), "-filter_complex", filter, "-an", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-b:v", "0", "-crf", crf.ToString(CultureInfo.InvariantCulture), temp], token).GetAwaiter().GetResult();
+                if (new FileInfo(temp).Length > 256 * 1024) continue;
+                var probe = ffmpeg.RunProbeAsync(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration", "-of", "json", temp], token).GetAwaiter().GetResult();
+                using var json = JsonDocument.Parse(probe);
+                var streams = json.RootElement.GetProperty("streams").EnumerateArray().ToArray();
+                var video = streams.Single(s => s.GetProperty("codec_type").GetString() == "video");
+                if (streams.Any(s => s.GetProperty("codec_type").GetString() == "audio") || video.GetProperty("codec_name").GetString() != "vp9" || video.GetProperty("width").GetInt32() != 512 || video.GetProperty("height").GetInt32() != 512) throw new InvalidDataException("Encoded video failed format validation.");
+                var seconds = double.Parse(json.RootElement.GetProperty("format").GetProperty("duration").GetString()!, CultureInfo.InvariantCulture);
+                if (seconds > 3.001 || seconds <= 0) throw new InvalidDataException("Encoded video duration is invalid.");
+                return File.ReadAllBytes(temp);
+            }
+            throw new InvalidDataException("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.");
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+
+    private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, CancellationToken token)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
         if (stream.Length > 100 * 1024 * 1024) throw new InvalidDataException("File exceeds 100 MB.");
         using var codec = SKCodec.Create(stream) ?? throw new InvalidDataException("Unsupported or damaged image.");
-        if (codec.EncodedFormat is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp) || codec.FrameCount > 1)
-            throw new InvalidDataException("Only static PNG, JPEG and WebP images can be exported.");
+        if (codec.EncodedFormat is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp or SKEncodedImageFormat.Bmp or SKEncodedImageFormat.Gif) || codec.FrameCount > 1)
+            throw new InvalidDataException("Unsupported or animated image.");
         var info = codec.Info;
         if (info.Width < 1 || info.Height < 1 || (long)info.Width * info.Height > MaxPixels) throw new InvalidDataException("Image dimensions exceed the limit.");
         using var bitmap = new SKBitmap(new SKImageInfo(info.Width, info.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
         if (codec.GetPixels(bitmap.Info, bitmap.GetPixels()) != SKCodecResult.Success) throw new InvalidDataException("Image decoding failed.");
         token.ThrowIfCancellationRequested();
-        using var surface = SKSurface.Create(new SKImageInfo(Size, Size, SKColorType.Rgba8888, SKAlphaType.Premul)) ?? throw new InvalidDataException("Unable to create image canvas.");
-        var canvas = surface.Canvas; canvas.Clear(SKColors.Transparent);
-        var scale = Math.Min((float)Size / info.Width, (float)Size / info.Height);
-        var w = info.Width * scale; var h = info.Height * scale;
-        var destination = SKRect.Create((Size - w) / 2, (Size - h) / 2, w, h);
         using var image = SKImage.FromBitmap(bitmap);
-        canvas.DrawImage(image, destination, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
-        using var result = surface.Snapshot();
+        using var result = Render(image, transform);
         foreach (var quality in new[] { 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0 })
         {
             token.ThrowIfCancellationRequested();
@@ -80,6 +171,20 @@ public sealed class StickerPackExporter
             if (encoded.Size <= MaxFileBytes) return encoded.ToArray();
         }
         throw new InvalidDataException("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.");
+    }
+
+    public static SKImage Render(SKImage image, TransformSettings transform)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(Size, Size, SKColorType.Rgba8888, SKAlphaType.Premul)) ?? throw new InvalidDataException("Unable to create image canvas.");
+        var canvas = surface.Canvas; canvas.Clear(SKColors.Transparent);
+        var sx = (float)Size / image.Width; var sy = (float)Size / image.Height;
+        if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
+        var scale = (float)Math.Clamp(double.IsFinite(transform.Scale) ? transform.Scale : 1, 0.1, 10);
+        canvas.Translate(Size / 2f + (float)transform.OffsetX, Size / 2f + (float)transform.OffsetY);
+        canvas.RotateDegrees((float)transform.Rotation);
+        canvas.Scale(sx * scale, sy * scale);
+        canvas.DrawImage(image, SKRect.Create(-image.Width / 2f, -image.Height / 2f, image.Width, image.Height), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+        return surface.Snapshot();
     }
 
     private static string SafeFolderName(string name)

@@ -55,9 +55,9 @@ public sealed class FfmpegService
         var height = stream.GetProperty("height").GetInt32();
         if (width <= 0 || height <= 0 || (long)width * height > 40_000_000)
             throw new InvalidDataException("Video dimensions exceed the limit.");
-        var durationText = root.GetProperty("format").GetProperty("duration").GetString();
+        var durationText = root.TryGetProperty("format", out var format) && format.TryGetProperty("duration", out var durationElement) ? durationElement.GetString() : null;
         if (!double.TryParse(durationText, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration) || !double.IsFinite(duration) || duration <= 0)
-            throw new InvalidDataException("Video duration is unavailable.");
+            duration = AnimatedPng.Duration(path) ?? throw new InvalidDataException("Video duration is unavailable.");
         double? fps = null;
         if (stream.TryGetProperty("avg_frame_rate", out var rate))
         {
@@ -132,6 +132,9 @@ public sealed class FfmpegService
         }
         finally { Processes.Release(); }
     }
+
+    internal Task<byte[]> RunEncoderAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffmpeg, arguments, 1024 * 1024, cancellationToken);
+    internal Task<byte[]> RunProbeAsync(string[] arguments, CancellationToken cancellationToken) => RunAsync(ffprobe, arguments, 1024 * 1024, cancellationToken);
 
     private static async Task<byte[]> RunAsync(string executable, string[] arguments, int maxBytes, CancellationToken cancellationToken)
     {

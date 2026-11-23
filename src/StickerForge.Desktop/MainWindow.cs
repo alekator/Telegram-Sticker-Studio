@@ -14,6 +14,8 @@ using Avalonia.Platform;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Avalonia.Controls.Templates;
+using SkiaSharp;
+using Avalonia.VisualTree;
 
 namespace StickerForge.Desktop;
 
@@ -53,6 +55,20 @@ public sealed class MainWindow : Window
     private readonly Border dropZone = new() { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
     private double previewZoom = 1;
     private readonly TextBlock galleryHint = new() { Text = "Drop files or folders here, or use Import", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 8) };
+    private readonly ComboBox fitMode = new() { ItemsSource = Enum.GetValues<FitMode>(), SelectedIndex = 0 };
+    private readonly Slider scale = new() { Minimum = .1, Maximum = 3, Value = 1 };
+    private readonly Slider offsetX = new() { Minimum = -512, Maximum = 512 };
+    private readonly Slider offsetY = new() { Minimum = -512, Maximum = 512 };
+    private readonly Slider rotation = new() { Minimum = -180, Maximum = 180 };
+    private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .1m, FormatString = "0.0" };
+    private readonly NumericUpDown fragmentDuration = new() { Minimum = .1m, Maximum = 3, Increment = .1m, Value = 3, FormatString = "0.0" };
+    private bool updatingTransform;
+    private PointerPressedEventArgs? dragPress;
+    private Point dragStart;
+    private StickerItem[]? dragItems;
+    private ListBoxItem? insertionCard;
+    private Point? previewDragStart;
+    private double previewStartX, previewStartY;
 
     public MainWindow()
     {
@@ -84,11 +100,12 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
         var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
         actions.Children.Add(Button("Remove", RemoveSelected));
-        actions.Children.Add(Button("↑", () => MoveSelected(-1)));
-        actions.Children.Add(Button("↓", () => MoveSelected(1)));
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
         DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
         gallery.SelectionChanged += async (_, _) => await SelectAsync();
+        gallery.PointerPressed += (_, e) => { if (e.GetCurrentPoint(gallery).Properties.IsLeftButtonPressed) { dragPress = e; dragStart = e.GetPosition(gallery); } };
+        gallery.PointerMoved += StartGalleryDrag;
+        gallery.PointerReleased += (_, _) => dragPress = null;
         gallery.ItemsPanel = new FuncTemplate<Panel?>(() => new WrapPanel());
         ScrollViewer.SetHorizontalScrollBarVisibility(gallery, ScrollBarVisibility.Disabled);
         var menu = new ContextMenu();
@@ -111,11 +128,39 @@ public sealed class MainWindow : Window
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
         var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = layers, ClipToBounds = true };
+        canvas.PointerPressed += (_, e) =>
+        {
+            if (SelectedEntry() is null || !e.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
+            previewDragStart = e.GetPosition(canvas); previewStartX = offsetX.Value; previewStartY = offsetY.Value; e.Pointer.Capture(canvas);
+        };
+        canvas.PointerMoved += (_, e) =>
+        {
+            if (previewDragStart is not { } start || !e.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
+            var point = e.GetPosition(canvas); var size = Math.Min(layers.Bounds.Width, layers.Bounds.Height) * previewZoom;
+            if (size <= 0) return;
+            offsetX.Value = Math.Clamp(previewStartX + (point.X - start.X) * 512 / size, offsetX.Minimum, offsetX.Maximum);
+            offsetY.Value = Math.Clamp(previewStartY + (point.Y - start.Y) * 512 / size, offsetY.Minimum, offsetY.Maximum);
+        };
+        canvas.PointerReleased += (_, e) => { previewDragStart = null; e.Pointer.Capture(null); };
         canvas.PointerWheelChanged += (_, e) => { previewZoom = Math.Clamp(previewZoom * (e.Delta.Y > 0 ? 1.1 : 1 / 1.1), 0.25, 8); preview.RenderTransform = new ScaleTransform(previewZoom, previewZoom); e.Handled = true; };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
         var properties = new StackPanel { Spacing = 12 };
         properties.Children.Add(new TextBlock { Text = "STICKER DETAILS", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
+        properties.Children.Add(new TextBlock { Text = "TRANSFORM", FontWeight = FontWeight.Bold });
+        properties.Children.Add(fitMode);
+        foreach (var (label, slider) in new[] { ("Scale", scale), ("Horizontal position", offsetX), ("Vertical position", offsetY), ("Rotation", rotation) })
+        {
+            properties.Children.Add(new TextBlock { Text = label }); properties.Children.Add(slider);
+            slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) await TransformChangedAsync(); };
+        }
+        fitMode.SelectionChanged += async (_, _) => await TransformChangedAsync();
+        properties.Children.Add(new TextBlock { Text = "Fragment start (seconds)" }); properties.Children.Add(fragmentStart);
+        properties.Children.Add(new TextBlock { Text = "Duration (up to 3 seconds)" }); properties.Children.Add(fragmentDuration);
+        fragmentStart.ValueChanged += async (_, _) => await TransformChangedAsync();
+        fragmentDuration.ValueChanged += async (_, _) => await TransformChangedAsync();
+        properties.Children.Add(Button("Reset transform", async () => { if (SelectedEntry() is { } entry) { entry.Item.Transform = new(); LoadTransform(entry.Item.Transform); await TransformChangedAsync(); } }));
+        properties.Children.Add(Button("Apply to selected", async () => { if (SelectedEntry() is not { } entry) return; foreach (var row in gallery.SelectedItems?.OfType<ListBoxItem>() ?? []) if (row.Tag is GalleryEntry target) target.Item.Transform = CopyTransform(entry.Item.Transform); MarkDirty(); await SelectAsync(); }));
         properties.Children.Add(new TextBlock { Text = "EXPORT TO TELEGRAM", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 16, 0, 0) });
         properties.Children.Add(new TextBlock { Text = "1. Import and arrange your images.\n2. Choose Export stickers and select a folder.\n3. Open Telegram's @Stickers mini app and create a static sticker set. Upload the numbered WebP files and assign an emoji to each.", TextWrapping = TextWrapping.Wrap });
         properties.Children.Add(new TextBlock { Text = "Your original files stay unchanged. Export runs locally.", TextWrapping = TextWrapping.Wrap, Opacity = .75 });
@@ -270,7 +315,7 @@ public sealed class MainWindow : Window
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose export destination", AllowMultiple = false });
         var path = folders.FirstOrDefault()?.TryGetLocalPath();
         if (path is null || busy) return;
-        var sources = project.Stickers.Select(s => s.SourcePath).ToArray();
+        var sources = project.Stickers.ToArray();
         var name = project.Name;
         busy = true; importing = new CancellationTokenSource();
         try
@@ -281,7 +326,10 @@ public sealed class MainWindow : Window
             var lines = new List<string> { status.Text, $"Folder: {result.Directory}" };
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Some files could not be exported:"); lines.AddRange(result.Errors); }
             var dialog = new Window { Title = "Export report", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-            dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, lines), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
+            var reportPanel = new DockPanel();
+            var openFolder = Button("Open folder", () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = $"Cannot open folder: {ex.Message}"; } return Task.CompletedTask; });
+            DockPanel.SetDock(openFolder, Dock.Bottom); reportPanel.Children.Add(openFolder);
+            reportPanel.Children.Add(new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, lines), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } }); dialog.Content = reportPanel;
             await dialog.ShowDialog(this);
         }
         catch (OperationCanceledException) { status.Text = "Export cancelled."; }
@@ -357,6 +405,16 @@ public sealed class MainWindow : Window
     }
     private void OnDragOver(object? sender, DragEventArgs e)
     {
+        if (dragItems is not null)
+        {
+            e.DragEffects = DragDropEffects.Move;
+            if (insertionCard is not null) insertionCard.BorderThickness = new Thickness(0);
+            insertionCard = (e.Source as Visual)?.GetSelfAndVisualAncestors().OfType<ListBoxItem>().FirstOrDefault();
+            if (insertionCard is not null) { insertionCard.BorderBrush = Brushes.DodgerBlue; insertionCard.BorderThickness = new Thickness(3, 0, 0, 0); }
+            var scroller = gallery.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+            if (scroller is not null) { var y = e.GetPosition(scroller).Y; if (y < 35) scroller.Offset = new Vector(scroller.Offset.X, Math.Max(0, scroller.Offset.Y - 15)); else if (y > scroller.Bounds.Height - 35) scroller.Offset = new Vector(scroller.Offset.X, scroller.Offset.Y + 15); }
+            e.Handled = true; return;
+        }
         var files = e.DataTransfer.TryGetFiles();
         e.DragEffects = !busy && files is { Length: > 0 } ? DragDropEffects.Copy : DragDropEffects.None;
         dropZone.BorderBrush = e.DragEffects == DragDropEffects.Copy ? Brushes.DodgerBlue : Brushes.Transparent;
@@ -364,6 +422,17 @@ public sealed class MainWindow : Window
     }
     private async void OnDrop(object? sender, DragEventArgs e)
     {
+        if (dragItems is not null)
+        {
+            var target = insertionCard?.Tag is GalleryEntry entry ? project.Stickers.IndexOf(entry.Item) : project.Stickers.Count;
+            var selected = dragItems.ToHashSet();
+            target -= project.Stickers.Take(target).Count(selected.Contains);
+            project.Stickers.RemoveAll(selected.Contains);
+            project.Stickers.InsertRange(Math.Clamp(target, 0, project.Stickers.Count), dragItems);
+            MarkDirty(); RefreshGallery();
+            foreach (var card in gallery.Items.OfType<ListBoxItem>()) if (card.Tag is GalleryEntry item && selected.Contains(item.Item)) gallery.SelectedItems?.Add(card);
+            e.Handled = true; return;
+        }
         dropZone.BorderBrush = Brushes.Transparent;
         if (busy) return;
         var paths = e.DataTransfer.TryGetFiles()?.Select(x => x.TryGetLocalPath()).OfType<string>().ToArray() ?? [];
@@ -396,6 +465,16 @@ public sealed class MainWindow : Window
             await dialog.ShowDialog(this);
         }
     }
+    private async void StartGalleryDrag(object? sender, PointerEventArgs e)
+    {
+        var position = e.GetPosition(gallery);
+        if (busy || dragPress is null || !e.GetCurrentPoint(gallery).Properties.IsLeftButtonPressed || Math.Abs(position.X - dragStart.X) + Math.Abs(position.Y - dragStart.Y) < 8) return;
+        var pressed = dragPress; dragPress = null;
+        dragItems = project.Stickers.Where(item => gallery.SelectedItems?.OfType<ListBoxItem>().Any(card => card.Tag is GalleryEntry entry && entry.Item == item) == true).ToArray();
+        if (dragItems.Length == 0) { dragItems = null; return; }
+        try { using var data = new DataTransfer(); data.Add(DataTransferItem.CreateText("StickerForge gallery items")); await DragDrop.DoDragDropAsync(pressed, data, DragDropEffects.Move); }
+        finally { if (insertionCard is not null) insertionCard.BorderThickness = new Thickness(0); insertionCard = null; dragItems = null; }
+    }
     private async Task SelectAsync()
     {
         previewZoom = 1; preview.RenderTransform = null;
@@ -405,6 +484,7 @@ public sealed class MainWindow : Window
         var generation = ++previewGeneration;
         if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
         var item = entry.Item;
+        LoadTransform(item.Transform);
         details.Text = $"Loading {Path.GetFileName(item.SourcePath)}…";
         try
         {
@@ -417,7 +497,8 @@ public sealed class MainWindow : Window
             }
             var bytes = info.Video is not null ? info.Thumbnail : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, 0))
-                : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
+                : info.FfmpegStill ? await ffmpeg.ReadFrameAsync(item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
+            bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
             if (generation != previewGeneration) return;
             using var stream = new MemoryStream(bytes);
             var bitmap = new Bitmap(stream);
@@ -440,6 +521,47 @@ public sealed class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
         { if (generation == previewGeneration) details.Text = $"Preview failed: {ex.Message}"; }
+    }
+    private GalleryEntry? SelectedEntry() => (gallery.SelectedItem as ListBoxItem)?.Tag as GalleryEntry;
+    private static TransformSettings CopyTransform(TransformSettings t) => new() { Fit = t.Fit, Scale = t.Scale, OffsetX = t.OffsetX, OffsetY = t.OffsetY, Rotation = t.Rotation, StartSeconds = t.StartSeconds, DurationSeconds = t.DurationSeconds };
+    private void LoadTransform(TransformSettings t)
+    {
+        updatingTransform = true;
+        fitMode.SelectedItem = t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .1, 3);
+        updatingTransform = false;
+    }
+    private async Task TransformChangedAsync()
+    {
+        if (updatingTransform || refreshing || busy || SelectedEntry() is not { } entry) return;
+        var t = entry.Item.Transform; t.Fit = fitMode.SelectedItem is FitMode fit ? fit : FitMode.Fit;
+        t.Scale = scale.Value; t.OffsetX = offsetX.Value; t.OffsetY = offsetY.Value; t.Rotation = rotation.Value;
+        t.StartSeconds = (double)(fragmentStart.Value ?? 0); t.DurationSeconds = (double)(fragmentDuration.Value ?? 3);
+        MarkDirty();
+        if (!cache.TryGetValue(entry.Item.Id, out var info)) return;
+        if (info.Video is not null) { if (videoPlayback is null) await ShowSeekFrameAsync(entry.Item.SourcePath, Math.Min(t.StartSeconds, videoSeek.Maximum), ++previewGeneration); return; }
+        if (info.FrameDurations is not null) { if (gifPlayback is null) { var frame = await Task.Run(() => GifFrameReader.ReadFrame(entry.Item.SourcePath, gifFrame)); SetPreview(RenderPreview(frame, CopyTransform(t))); } return; }
+        var generation = ++previewGeneration; var snapshot = CopyTransform(t);
+        try
+        {
+            var input = info.FfmpegStill ? await ffmpeg.ReadFrameAsync(entry.Item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(entry.Item.SourcePath));
+            var bytes = await Task.Run(() => RenderPreview(input, snapshot));
+            if (generation != previewGeneration) return;
+            using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
+            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { status.Text = $"Preview failed: {ex.Message}"; }
+    }
+    private static byte[] RenderPreview(byte[] bytes, TransformSettings transform)
+    {
+        using var original = SKImage.FromEncodedData(bytes) ?? throw new InvalidDataException("Image decoding failed.");
+        using var rendered = StickerPackExporter.Render(original, transform);
+        using var encoded = rendered.Encode(SKEncodedImageFormat.Png, 100);
+        return encoded.ToArray();
+    }
+    private void SetPreview(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
+        preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
     }
     private void UpdateVideoTime(double seconds) => videoTime.Text = $"{TimeSpan.FromSeconds(seconds).ToString(@"mm\:ss\.ff")} / {TimeSpan.FromSeconds(videoMetadata?.DurationSeconds ?? 0).ToString(@"mm\:ss\.ff")}";
     private void StopVideo()
@@ -466,25 +588,28 @@ public sealed class MainWindow : Window
         {
             while (true)
             {
+                var settings = SelectedEntry()?.Item.Transform;
+                var loopStart = Math.Clamp(settings?.StartSeconds ?? 0, 0, Math.Max(0, metadata.DurationSeconds - .05));
+                var loopEnd = Math.Min(metadata.DurationSeconds, loopStart + (settings?.DurationSeconds ?? 3));
+                if (start < loopStart || start >= loopEnd) start = loopStart;
                 var clock = Stopwatch.StartNew();
                 var received = false;
                 await foreach (var frame in ffmpeg.StreamFramesAsync(path, metadata, start, source.Token))
                 {
+                    if (frame.Seconds >= loopEnd) break;
                     received = true;
                     var delay = frame.Seconds - start - clock.Elapsed.TotalSeconds;
                     if (delay > 0) await Task.Delay(TimeSpan.FromSeconds(delay), source.Token);
                     source.Token.ThrowIfCancellationRequested();
-                    var bitmap = new WriteableBitmap(new PixelSize(frame.Width, frame.Height), new Vector(96, 96), PixelFormat.Rgba8888, AlphaFormat.Unpremul);
-                    using (var locked = bitmap.Lock())
-                        for (var y = 0; y < frame.Height; y++)
-                            Marshal.Copy(frame.Rgba, y * frame.Width * 4, IntPtr.Add(locked.Address, y * locked.RowBytes), frame.Width * 4);
-                    preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+                    var transform = CopyTransform(SelectedEntry()?.Item.Transform ?? new());
+                    var rendered = await Task.Run(() => RenderFrame(frame, transform), source.Token);
+                    source.Token.ThrowIfCancellationRequested(); SetPreview(rendered);
                     updatingSeek = true; videoSeek.Value = Math.Min(frame.Seconds, videoSeek.Maximum); updatingSeek = false;
                     UpdateVideoTime(frame.Seconds);
                 }
                 source.Token.ThrowIfCancellationRequested();
                 if (!received) throw new InvalidDataException("Video decoder returned no frames.");
-                start = 0;
+                start = loopStart;
             }
         }
         catch (OperationCanceledException) { }
@@ -504,6 +629,8 @@ public sealed class MainWindow : Window
         try
         {
             var bytes = await ffmpeg.ReadFrameAsync(path, seconds, source.Token);
+            var transform = CopyTransform(SelectedEntry()?.Item.Transform ?? new());
+            bytes = await Task.Run(() => RenderPreview(bytes, transform), source.Token);
             if (generation != previewGeneration || videoPlayback is not null) return;
             using var stream = new MemoryStream(bytes);
             var bitmap = new Bitmap(stream);
@@ -536,12 +663,20 @@ public sealed class MainWindow : Window
             while (true)
             {
                 await Task.Delay(Math.Max(durations[gifFrame], 20), source.Token);
-                var next = (gifFrame + 1) % durations.Length;
+                var transformSettings = SelectedEntry()?.Item.Transform;
+                var begin = (transformSettings?.StartSeconds ?? 0) * 1000;
+                var end = begin + (transformSettings?.DurationSeconds ?? 3) * 1000;
+                var elapsed = 0d; var first = 0;
+                while (first < durations.Length - 1 && elapsed + Math.Max(durations[first], 20) <= begin) elapsed += Math.Max(durations[first++], 20);
+                var next = gifFrame + 1;
+                var nextTime = durations.Take(Math.Min(next, durations.Length)).Sum(x => Math.Max(x, 20));
+                if (next >= durations.Length || nextTime >= end || next < first) next = first;
                 var bytes = await Task.Run(() => GifFrameReader.ReadFrame(path, next, source.Token), source.Token);
                 source.Token.ThrowIfCancellationRequested();
                 using var stream = new MemoryStream(bytes);
-                var bitmap = new Bitmap(stream);
-                preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap; gifFrame = next;
+                var transform = CopyTransform(SelectedEntry()?.Item.Transform ?? new());
+                var rendered = await Task.Run(() => RenderPreview(bytes, transform), source.Token);
+                source.Token.ThrowIfCancellationRequested(); SetPreview(rendered); gifFrame = next;
             }
         }
         catch (OperationCanceledException) { }
@@ -552,6 +687,13 @@ public sealed class MainWindow : Window
             if (ReferenceEquals(gifPlayback, source)) { gifPlayback = null; gifPlay.Content = "Play"; }
             source.Dispose();
         }
+    }
+    private static byte[] RenderFrame(VideoFrame frame, TransformSettings transform)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(frame.Width, frame.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        Marshal.Copy(frame.Rgba, 0, bitmap.GetPixels(), frame.Rgba.Length);
+        using var source = SKImage.FromBitmap(bitmap); using var result = StickerPackExporter.Render(source, transform);
+        using var encoded = result.Encode(SKEncodedImageFormat.Png, 100); return encoded.ToArray();
     }
     private Task RemoveSelected()
     {

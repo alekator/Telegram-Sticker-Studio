@@ -1,10 +1,23 @@
 using SkiaSharp;
 using StickerForge.Media;
+using StickerForge.Core;
 
 namespace StickerForge.Tests;
 
 public sealed class StickerPackExporterTests : IDisposable
 {
+    [Fact]
+    public async Task TransformChangesExportAndMatchesSharedRenderer()
+    {
+        var path = Image("transform.png", SKEncodedImageFormat.Png);
+        var transform = new TransformSettings { Fit = FitMode.Fill, Scale = .75, OffsetX = 70, Rotation = 30 };
+        var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = path, Transform = transform }], directory, "transform");
+        Assert.Empty(report.Errors);
+        using var original = SKImage.FromEncodedData(path); using var rendered = StickerPackExporter.Render(original, transform);
+        using var expected = SKBitmap.FromImage(rendered); using var actual = SKBitmap.Decode(Path.Combine(report.Directory, "001.webp"));
+        Assert.Equal(expected.GetPixel(0, 0).Alpha, actual.GetPixel(0, 0).Alpha);
+        Assert.Equal(expected.GetPixel(256, 256).Alpha, actual.GetPixel(256, 256).Alpha);
+    }
     private readonly string directory = Path.Combine(Path.GetTempPath(), "stickerforge-export-" + Guid.NewGuid().ToString("N"));
     public StickerPackExporterTests() => Directory.CreateDirectory(directory);
     public void Dispose() => Directory.Delete(directory, true);

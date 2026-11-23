@@ -3,7 +3,7 @@ using StickerForge.Core;
 
 namespace StickerForge.Media;
 
-public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail, int[]? FrameDurations = null, VideoMetadata? Video = null);
+public sealed record ImageInfo(string Format, int Width, int Height, long FileSize, byte[] Thumbnail, int[]? FrameDurations = null, VideoMetadata? Video = null, bool FfmpegStill = false);
 public sealed record ImportResult(string Path, StickerItem? Item, ImageInfo? Info, string? Error);
 public interface IImageDecoder
 {
@@ -22,7 +22,6 @@ public sealed class SkiaImageDecoder : IImageDecoder
         var format = codec.EncodedFormat;
         if (format is not (SKEncodedImageFormat.Png or SKEncodedImageFormat.Jpeg or SKEncodedImageFormat.Webp or SKEncodedImageFormat.Bmp or SKEncodedImageFormat.Gif))
             throw new InvalidDataException("Unsupported image. Video support is not yet available.");
-        if (format != SKEncodedImageFormat.Gif && codec.FrameCount > 1) throw new InvalidDataException("Animated images other than GIF are not yet supported.");
         if (codec.FrameCount > 1000) throw new InvalidDataException("GIF exceeds the frame limit.");
         var info = codec.Info;
         if (info.Width <= 0 || info.Height <= 0 || (long)info.Width * info.Height > 40_000_000)
@@ -36,7 +35,7 @@ public sealed class SkiaImageDecoder : IImageDecoder
             ?? throw new InvalidDataException("Unable to create thumbnail.");
         using var image = SKImage.FromBitmap(resized);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        var durations = format == SKEncodedImageFormat.Gif ? codec.FrameInfo.Select(f => f.Duration).ToArray() : null;
+        var durations = codec.FrameCount > 1 ? codec.FrameInfo.Select(f => f.Duration).ToArray() : null;
         return new ImageInfo(format.ToString(), info.Width, info.Height, file.Length, data.ToArray(), durations);
     }
 }
@@ -55,7 +54,15 @@ public sealed class ImageImporter(IImageDecoder decoder, FfmpegService? ffmpeg =
             try
             {
                 ImageInfo info;
-                if (VideoExtensions.Contains(Path.GetExtension(path)))
+                if (File.Exists(path) && IsTiff(path))
+                {
+                    if (ffmpeg is null) throw new InvalidDataException("TIFF decoding requires FFmpeg.");
+                    var frame = await ffmpeg.ReadFrameAsync(path, 0, cancellationToken);
+                    using var image = SKImage.FromEncodedData(frame) ?? throw new InvalidDataException("TIFF decoding failed.");
+                    if (image.Width <= 0 || image.Height <= 0 || (long)image.Width * image.Height > 40_000_000) throw new InvalidDataException("Image dimensions exceed the limit.");
+                    info = new ImageInfo("TIFF", image.Width, image.Height, new FileInfo(path).Length, frame, FfmpegStill: true);
+                }
+                else if (VideoExtensions.Contains(Path.GetExtension(path)) || AnimatedPng.Duration(path) is not null)
                 {
                     if (ffmpeg is null) throw new InvalidDataException("FFmpeg and FFprobe are unavailable; configure them to import video.");
                     var availability = await ffmpeg.CheckAsync(cancellationToken);
@@ -75,5 +82,20 @@ public sealed class ImageImporter(IImageDecoder decoder, FfmpegService? ffmpeg =
             progress?.Report((i + 1, files.Length));
         }
         return results;
+    }
+
+    internal static bool IsTiff(string path)
+    {
+        using var stream = File.OpenRead(path); Span<byte> signature = stackalloc byte[4];
+        if (stream.Read(signature) != 4) return false;
+        return signature.SequenceEqual(new byte[] { 0x49, 0x49, 0x2a, 0x00 }) || signature.SequenceEqual(new byte[] { 0x4d, 0x4d, 0x00, 0x2a }) ||
+               signature.SequenceEqual(new byte[] { 0x49, 0x49, 0x2b, 0x00 }) || signature.SequenceEqual(new byte[] { 0x4d, 0x4d, 0x00, 0x2b });
+    }
+
+    private static bool IsOtherAnimation(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var codec = SKCodec.Create(stream);
+        return codec is not null && codec.EncodedFormat != SKEncodedImageFormat.Gif && codec.FrameCount > 1;
     }
 }
