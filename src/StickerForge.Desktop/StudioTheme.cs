@@ -20,6 +20,11 @@ internal sealed class StudioTheme
     public readonly SolidColorBrush Selected = new();
     public readonly SolidColorBrush Text = new();
     public readonly SolidColorBrush Secondary = new();
+    public readonly SolidColorBrush PanelToggleSurface = new();
+    public readonly SolidColorBrush PanelToggleHover = new();
+    public readonly SolidColorBrush PanelTogglePressed = new();
+    public readonly SolidColorBrush PanelToggleBorder = new();
+    public readonly SolidColorBrush PanelToggleIcon = new();
     public void Apply(bool light)
     {
         Background.Color = Color.Parse(light ? "#F2F5F8" : "#071426");
@@ -31,5 +36,10 @@ internal sealed class StudioTheme
         Selected.Color = Color.Parse(light ? "#D5EAFE" : "#103C6A");
         Text.Color = Color.Parse(light ? "#17212B" : "#F5F7FA");
         Secondary.Color = Color.Parse(light ? "#536A80" : "#91A3B5");
+        PanelToggleSurface.Color = Color.Parse(light ? "#DCE7F0" : "#304B64");
+        PanelToggleHover.Color = Color.Parse(light ? "#C7D9E8" : "#426782");
+        PanelTogglePressed.Color = Color.Parse(light ? "#ACCADF" : "#577F9D");
+        PanelToggleBorder.Color = Color.Parse(light ? "#9EB5C7" : "#65829A");
+        PanelToggleIcon.Color = Color.Parse(light ? "#263946" : "#F5F9FC");
     }
 }

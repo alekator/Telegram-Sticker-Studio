@@ -10,6 +10,7 @@ using StickerForge.Core;
 using StickerForge.Infrastructure;
 using StickerForge.Media;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Presenters;
 using Avalonia.Platform;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -126,6 +127,8 @@ public sealed class MainWindow : Window
         FontSize = 14;
         Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)), new Setter(BackgroundProperty, studioTheme.Surface), new Setter(ForegroundProperty, studioTheme.Text) } });
         Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
+        Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelToggleHover) } });
+        Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pressed").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelTogglePressed) } });
         Width = 1280; Height = 760; MinWidth = 700; MinHeight = 520;
         Background = studioTheme.Background; Foreground = studioTheme.Text; Resources["SystemAccentColor"] = studioTheme.Accent.Color;
         Resources["SystemControlHighlightAccentBrush"] = studioTheme.Accent;
@@ -135,6 +138,7 @@ public sealed class MainWindow : Window
         projectMenu = new ContextMenu();
         projectMenu.Items.Add(MenuAction("Новый проект", NewAsync));
         projectMenu.Items.Add(MenuAction("Сохранить как…", async () => { await SaveAsync(true); }));
+        projectMenu.Items.Add(MenuAction("Добавить файлы…", PickFilesAsync));
         projectMenu.Items.Add(MenuAction("Добавить папку…", PickFolderAsync));
         projectMenu.Items.Add(MenuAction("О программе", ShowAboutAsync));
         StudioLocalization.Capture(projectMenu);
@@ -144,15 +148,13 @@ public sealed class MainWindow : Window
         var brandName = new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center };
         brand.Children.Add(brandName);
         DockPanel.SetDock(brand, Dock.Left); top.Children.Add(brand);
-        var addAction = ActionButton("M12 4 L12 20 M4 12 L20 12", "Добавить", PickFilesAsync, "Добавить файлы · Ctrl+I"); addAction.Name = "AddFilesAction";
         var openAction = ActionButton("M3 7 L9 7 L11 9 L21 9 L19 19 L3 19 Z M3 7 L3 5 L9 5 L11 7", "Открыть", OpenAsync, "Открыть проект"); openAction.Name = "OpenProjectAction";
         var saveAction = ActionButton("M4 3 L18 3 L21 6 L21 21 L3 21 L3 3 Z M7 3 L7 9 L17 9 L17 3 M7 21 L7 14 L17 14 L17 21", "Сохранить", async () => { await SaveAsync(false); }, "Сохранить проект · Ctrl+S"); saveAction.Name = "SaveProjectAction";
-        DockPanel.SetDock(addAction, Dock.Left); top.Children.Add(addAction);
-        DockPanel.SetDock(openAction, Dock.Left); top.Children.Add(openAction);
-        DockPanel.SetDock(saveAction, Dock.Left); top.Children.Add(saveAction);
         var projectButton = Button("⋯", () => Task.CompletedTask, "Другие действия"); projectButton.Name = "MoreActions";
         projectButton.ContextMenu = projectMenu; projectButton.Click += (_, _) => projectMenu.Open(projectButton);
         DockPanel.SetDock(projectButton, Dock.Left); top.Children.Add(projectButton);
+        DockPanel.SetDock(openAction, Dock.Left); top.Children.Add(openAction);
+        DockPanel.SetDock(saveAction, Dock.Left); top.Children.Add(saveAction);
         packName.VerticalAlignment = VerticalAlignment.Center; DockPanel.SetDock(packName, Dock.Left); top.Children.Add(packName);
         settingsButton = IconButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", ShowSettingsAsync, "Настройки"); settingsButton.Name = "SettingsAction";
         DockPanel.SetDock(settingsButton, Dock.Right); top.Children.Add(settingsButton);
@@ -466,7 +468,8 @@ public sealed class MainWindow : Window
     }
     private Button PanelVisibilityButton(string name, Action action)
     {
-        var button = new Button { Name = name, Width = 32, Height = 40, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), Margin = new Thickness(0), Background = studioTheme.Surface, CornerRadius = new CornerRadius(9), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        var button = new Button { Name = name, Width = 32, Height = 40, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), Margin = new Thickness(0), Background = studioTheme.PanelToggleSurface, BorderBrush = studioTheme.PanelToggleBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        button.Classes.Add("panel-toggle");
         button.Click += (_, _) => action();
         return button;
     }
@@ -476,7 +479,7 @@ public sealed class MainWindow : Window
         void Update(Button button, bool visible, bool left)
         {
             var pointsLeft = left == visible;
-            button.Content = Icon(pointsLeft ? "M15 5 L8 12 L15 19" : "M9 5 L16 12 L9 19", 14, studioTheme.Text);
+            button.Content = Icon(pointsLeft ? "M15 5 L8 12 L15 19" : "M9 5 L16 12 L9 19", 14, studioTheme.PanelToggleIcon);
             var label = left ? (visible ? "Свернуть галерею" : "Показать галерею") : (visible ? "Свернуть свойства" : "Показать свойства");
             var localized = Tr(label);
             ToolTip.SetTip(button, localized);

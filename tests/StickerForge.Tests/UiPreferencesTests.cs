@@ -5,6 +5,9 @@ using Avalonia.Styling;
 using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Interactivity;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Controls.Presenters;
 using StickerForge.Desktop;
 using StickerForge.Infrastructure;
 
@@ -13,6 +16,52 @@ namespace StickerForge.Tests;
 [Collection("Avalonia Headless")]
 public sealed class UiPreferencesTests
 {
+    [Fact]
+    public async Task PanelButtonsUseThemeColorsAndDistinctPointerStates()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-panel-theme-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(() =>
+            {
+                var settings = new UiPreferencesStore(Path.Combine(directory, "ui.json"));
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "panels.json")), settings) { Width = 1280, Height = 720 };
+                try
+                {
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    project.Stickers.Add(new StickerForge.Core.StickerItem { SourcePath = Path.Combine(directory, "sample.png") });
+                    typeof(MainWindow).GetMethod("RefreshGallery", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+                    window.Show(); window.UpdateLayout();
+                    var button = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "GalleryVisibility");
+                    foreach (var theme in new[] { "dark", "light", "system" })
+                    {
+                        typeof(MainWindow).GetField("preferences", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, new UiPreferences("ru", theme));
+                        typeof(MainWindow).GetMethod("ApplyPreferences", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+                        window.MouseMove(new Point(1, 1), RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        var light = theme == "light" || (theme == "system" && window.ActualThemeVariant == ThemeVariant.Light);
+                        var surface = Assert.IsType<SolidColorBrush>(button.Background).Color;
+                        var border = Assert.IsType<SolidColorBrush>(button.BorderBrush).Color;
+                        var icon = Assert.IsType<Avalonia.Controls.Shapes.Path>(button.Content);
+                        Assert.Equal(Color.Parse(light ? "#DCE7F0" : "#304B64"), surface);
+                        Assert.Equal(Color.Parse(light ? "#9EB5C7" : "#65829A"), border);
+                        Assert.Equal(Color.Parse(light ? "#263946" : "#F5F9FC"), Assert.IsType<SolidColorBrush>(icon.Stroke).Color);
+                        Assert.Equal(new Thickness(1), button.BorderThickness);
+                        var presenter = button.GetVisualDescendants().OfType<ContentPresenter>().Single(x => x.Name == "PART_ContentPresenter");
+                        var origin = button.TranslatePoint(new Point(0, 0), window)!.Value;
+                        var point = new Point(origin.X + 16, origin.Y + 20);
+                        window.MouseMove(point, RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(Color.Parse(light ? "#C7D9E8" : "#426782"), Assert.IsType<SolidColorBrush>(presenter.Background).Color);
+                        window.MouseDown(point, MouseButton.Left, RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(Color.Parse(light ? "#ACCADF" : "#577F9D"), Assert.IsType<SolidColorBrush>(presenter.Background).Color);
+                        window.MouseUp(point, MouseButton.Left, RawInputModifiers.LeftMouseButton); Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                    }
+                }
+                finally { window.Close(); }
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
     [Fact]
     public async Task PanelButtonsRemainUsableAcrossStatesAndWindowSizes()
     {
@@ -107,16 +156,16 @@ public sealed class UiPreferencesTests
                         if (populated) gallery.SelectedIndex = 0;
                         typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
                         var buttons = window.GetVisualDescendants().OfType<Button>().ToArray();
-                        var add = buttons.Single(x => x.Name == "AddFilesAction");
+                        Assert.DoesNotContain(buttons, x => x.Name == "AddFilesAction");
                         var open = buttons.Single(x => x.Name == "OpenProjectAction");
                         var save = buttons.Single(x => x.Name == "SaveProjectAction");
                         var more = buttons.Single(x => x.Name == "MoreActions");
                         var settings = buttons.Single(x => x.Name == "SettingsAction");
+                        Assert.Contains(buttons, x => x.Content is string text && text == (language == "en" ? "＋  Add files" : "＋  Добавить файлы"));
                         Assert.Single(buttons, x => ToolTip.GetTip(x) is string tip && tip == (language == "en" ? "Settings" : "Настройки"));
-                        Assert.Equal(language == "en" ? "Add" : "Добавить", ((StackPanel)add.Content!).Children.OfType<TextBlock>().Single().Text);
                         Assert.Equal(language == "en" ? "Open" : "Открыть", ((StackPanel)open.Content!).Children.OfType<TextBlock>().Single().Text);
                         Assert.Equal(language == "en" ? "Save" : "Сохранить", ((StackPanel)save.Content!).Children.OfType<TextBlock>().Single().Text);
-                        foreach (var button in new[] { add, open, save, more, settings })
+                        foreach (var button in new[] { more, open, save, settings })
                         {
                             var position = button.TranslatePoint(new Point(0, 0), window)!.Value;
                             Assert.True(position.X >= 0 && position.X + button.Bounds.Width <= width, $"{width}: {button.Name} is clipped");
@@ -124,6 +173,9 @@ public sealed class UiPreferencesTests
                         var menu = Assert.IsType<ContextMenu>(more.ContextMenu);
                         var items = menu.Items.OfType<MenuItem>().ToArray();
                         Assert.All(items, item => Assert.Empty(item.Items));
+                        Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "Add files…" : "Добавить файлы…"));
+                        Assert.True(more.TranslatePoint(new Point(0, 0), window)!.Value.X < open.TranslatePoint(new Point(0, 0), window)!.Value.X);
+                        Assert.True(open.TranslatePoint(new Point(0, 0), window)!.Value.X < save.TranslatePoint(new Point(0, 0), window)!.Value.X);
                         Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "New project" : "Новый проект"));
                         Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "Save as…" : "Сохранить как…"));
                         Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "About" : "О программе"));
@@ -150,7 +202,7 @@ public sealed class UiPreferencesTests
                         combos[1].SelectedIndex = 1;
                         Assert.Equal(language == "en" ? "ru" : "en", preferences.Load().Language);
                         Assert.Equal("light", preferences.Load().Theme);
-                        Assert.Equal(language == "en" ? "Добавить" : "Add", ((StackPanel)add.Content!).Children.OfType<TextBlock>().Single().Text);
+                        Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "Добавить файлы…" : "Add files…"));
                         settings.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                         Assert.False(page.IsVisible); Assert.True(editor.IsVisible); Assert.Same(inactive, settings.Background);
                         Assert.Same(selected, gallery.SelectedItem); Assert.Equal(populated ? 1 : 0, project.Stickers.Count);
