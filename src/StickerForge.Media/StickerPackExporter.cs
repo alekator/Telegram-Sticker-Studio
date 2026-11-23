@@ -120,14 +120,8 @@ public sealed class StickerPackExporter
         var metadata = ffmpeg.ProbeAsync(path, token).GetAwaiter().GetResult();
         var start = Math.Clamp(transform.StartSeconds, 0, Math.Max(0, metadata.DurationSeconds - .05));
         var duration = Math.Min(Math.Clamp(transform.DurationSeconds, .05, 3), metadata.DurationSeconds - start);
-        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
-        var sx = 512d / metadata.Width; var sy = 512d / metadata.Height;
-        if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
-        var scale = Math.Clamp(transform.Scale, .1, 10);
-        var width = Math.Clamp((int)Math.Round(metadata.Width * sx * scale), 1, 5120);
-        var height = Math.Clamp((int)Math.Round(metadata.Height * sy * scale), 1, 5120);
+        var filter = BuildVideoFilter(metadata, transform, duration);
         static string N(double n) => n.ToString("0.########", CultureInfo.InvariantCulture);
-        var filter = $"[0:v]fps={N(fps)},format=rgba,scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
         var temp = Path.Combine(directory, $".{Guid.NewGuid():N}.webm");
         try
         {
@@ -148,6 +142,18 @@ public sealed class StickerPackExporter
             throw new InvalidDataException("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.");
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+
+    internal static string BuildVideoFilter(VideoMetadata metadata, TransformSettings transform, double duration)
+    {
+        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
+        var sx = 512d / metadata.Width; var sy = 512d / metadata.Height;
+        if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
+        var scale = Math.Clamp(transform.Scale, .1, 10);
+        var width = Math.Clamp((int)Math.Round(metadata.Width * sx * scale), 1, 5120);
+        var height = Math.Clamp((int)Math.Round(metadata.Height * sy * scale), 1, 5120);
+        static string N(double n) => n.ToString("0.########", CultureInfo.InvariantCulture);
+        return $"[0:v]fps={N(fps)},format=rgba,scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
     }
 
     private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, CancellationToken token)

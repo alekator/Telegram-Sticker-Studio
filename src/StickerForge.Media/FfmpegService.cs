@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Runtime.CompilerServices;
+using StickerForge.Core;
 
 namespace StickerForge.Media;
 
@@ -82,22 +83,30 @@ public sealed class FfmpegService
             "-i", Path.GetFullPath(path), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], 32 * 1024 * 1024, cancellationToken);
     }
 
+    public Task<byte[]> ReadTransformedFrameAsync(string path, VideoMetadata metadata, double seconds, TransformSettings transform, CancellationToken cancellationToken = default)
+    {
+        var filter = StickerPackExporter.BuildVideoFilter(metadata, transform, 1);
+        return RunAsync(ffmpeg, ["-v", "error", "-protocol_whitelist", "file,pipe", "-ss", seconds.ToString("R", CultureInfo.InvariantCulture),
+            "-i", Path.GetFullPath(path), "-filter_complex", filter, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"], 32 * 1024 * 1024, cancellationToken);
+    }
+
     // A single process emits a bounded stream of frames; reading applies backpressure.
     public async IAsyncEnumerable<VideoFrame> StreamFramesAsync(string path, VideoMetadata metadata, double startSeconds,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default, TransformSettings? transform = null)
     {
         if (!double.IsFinite(startSeconds) || startSeconds < 0 || startSeconds >= metadata.DurationSeconds)
             throw new ArgumentOutOfRangeException(nameof(startSeconds));
         var scale = Math.Min(1d, 640d / Math.Max(metadata.Width, metadata.Height));
-        var width = Math.Max(1, (int)(metadata.Width * scale));
-        var height = Math.Max(1, (int)(metadata.Height * scale));
+        var width = transform is null ? Math.Max(1, (int)(metadata.Width * scale)) : 512;
+        var height = transform is null ? Math.Max(1, (int)(metadata.Height * scale)) : 512;
         var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
         await Processes.WaitAsync(cancellationToken);
         try
         {
             var start = new ProcessStartInfo(ffmpeg) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            var filter = transform is null ? $"fps={fps.ToString("R", CultureInfo.InvariantCulture)},scale={width}:{height},format=rgba" : StickerPackExporter.BuildVideoFilter(metadata, transform, Math.Min(3, metadata.DurationSeconds - startSeconds));
             foreach (var argument in new[] { "-v", "error", "-protocol_whitelist", "file,pipe", "-ss", startSeconds.ToString("R", CultureInfo.InvariantCulture),
-                "-i", Path.GetFullPath(path), "-an", "-vf", $"fps={fps.ToString("R", CultureInfo.InvariantCulture)},scale={width}:{height},format=rgba",
+                "-i", Path.GetFullPath(path), "-an", transform is null ? "-vf" : "-filter_complex", filter,
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1" }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start) ?? throw new IOException("Could not start video decoder.");
             using var registration = cancellationToken.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { } });

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using StickerForge.Media;
 using SkiaSharp;
+using StickerForge.Core;
 
 namespace StickerForge.Tests;
 
@@ -56,6 +57,11 @@ public sealed class VideoIntegrationTests
                 using var image = SKBitmap.Decode(png.ToArray()); Assert.NotNull(image); Assert.Equal(0, image.GetPixel(0, 0).Alpha); Assert.True(image.GetPixel(256, 256).Alpha > 0);
                 Assert.Equal(metadata.Codec, imported.Info!.Video!.Codec);
                 Assert.NotEmpty(await service.ReadFrameAsync(path, 0));
+                var settings = new TransformSettings { Fit = FitMode.Fill, Scale = .8, Rotation = 25, OffsetX = 30 };
+                using (var transformed = SKBitmap.Decode(await service.ReadTransformedFrameAsync(path, metadata, 0, settings)))
+                { Assert.NotNull(transformed); Assert.Equal(512, transformed.Width); Assert.Equal(512, transformed.Height); }
+                await foreach (var frame in service.StreamFramesAsync(path, metadata, 0, CancellationToken.None, settings))
+                { Assert.Equal(512, frame.Width); Assert.Equal(512, frame.Height); break; }
                 var frames = new List<VideoFrame>();
                 await foreach (var frame in service.StreamFramesAsync(path, metadata, 0))
                     frames.Add(frame);
