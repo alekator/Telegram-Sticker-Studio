@@ -18,6 +18,8 @@ using SkiaSharp;
 using Avalonia.VisualTree;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.Styling;
+using System.Globalization;
 
 namespace StickerForge.Desktop;
 
@@ -66,8 +68,8 @@ public sealed class MainWindow : Window
     private readonly Slider rotation = new() { Minimum = -180, Maximum = 180 };
     private readonly CheckBox flipHorizontal = new() { Content = "По горизонтали" };
     private readonly CheckBox flipVertical = new() { Content = "По вертикали" };
-    private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .05m, FormatString = "0.00", Width = 110, MinWidth = 110 };
-    private readonly NumericUpDown fragmentDuration = new() { Minimum = .01m, Maximum = 3, Increment = .05m, Value = 3, FormatString = "0.00", Width = 110, MinWidth = 110 };
+    private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .05m, FormatString = "0.00", Width = 110, MinWidth = 110, ShowButtonSpinner = false, Height = 34 };
+    private readonly NumericUpDown fragmentDuration = new() { Minimum = .01m, Maximum = 3, Increment = .05m, Value = 3, FormatString = "0.00", Width = 110, MinWidth = 110, ShowButtonSpinner = false, Height = 34 };
     private readonly TextBlock scaleLabel = new();
     private readonly TextBlock rotationLabel = new();
     private readonly TextBlock offsetXLabel = new();
@@ -100,12 +102,18 @@ public sealed class MainWindow : Window
     private GridSplitter? propertiesSplitter;
     private Viewbox? previewViewbox;
     private Border? previewCanvas;
+    private readonly TextBlock emptyCanvas = new() { Text = "Перетащите файлы сюда или нажмите «Добавить файлы»", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 340, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock emptyProperties = new() { Text = "Выберите стикер для редактирования", TextWrapping = TextWrapping.Wrap };
+    private StackPanel? editingProperties;
 
     public MainWindow(PanelLayoutStore? layoutStore = null)
     {
         this.layoutStore = layoutStore ?? new();
         importer = new ImageImporter(new SkiaImageDecoder(), ffmpeg);
         Title = "StickerForge Studio";
+        FontSize = 14;
+        Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(10, 5)) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)) } });
         Width = 1280; Height = 760; MinWidth = 820; MinHeight = 520;
         RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         Background = new SolidColorBrush(Color.Parse("#111621"));
@@ -137,8 +145,8 @@ public sealed class MainWindow : Window
         var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("320,6,*,6,280") };
         workspaceGrid = columns;
         columns.ColumnDefinitions[0].MinWidth = 180; columns.ColumnDefinitions[0].MaxWidth = 600;
-        columns.ColumnDefinitions[2].MinWidth = 220;
-        columns.ColumnDefinitions[4].MinWidth = 220; columns.ColumnDefinitions[4].MaxWidth = 500;
+        columns.ColumnDefinitions[2].MinWidth = 400;
+        columns.ColumnDefinitions[4].MinWidth = 270; columns.ColumnDefinitions[4].MaxWidth = 500;
         var left = new DockPanel();
         var galleryTitle = new TextBlock { Text = "СТИКЕРЫ", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
         DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
@@ -190,7 +198,11 @@ public sealed class MainWindow : Window
         var stickerBoundary = new Border { Width = 512, Height = 512, Child = layers };
         var viewbox = new Viewbox { Stretch = Stretch.Uniform, Child = stickerBoundary };
         previewViewbox = viewbox;
-        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = viewbox, ClipToBounds = true };
+        var canvasContent = new Grid(); canvasContent.Children.Add(viewbox); canvasContent.Children.Add(emptyCanvas);
+        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = canvasContent, ClipToBounds = true };
+        DragDrop.SetAllowDrop(canvas, true);
+        canvas.AddHandler(DragDrop.DragOverEvent, OnDragOver, RoutingStrategies.Bubble, true);
+        canvas.AddHandler(DragDrop.DropEvent, OnDrop, RoutingStrategies.Bubble, true);
         previewCanvas = canvas;
         canvas.SizeChanged += (_, _) => EnsurePreviewFits();
         canvas.PointerPressed += (_, e) =>
@@ -225,7 +237,8 @@ public sealed class MainWindow : Window
         Grid.SetColumn(center, 2); columns.Children.Add(center);
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = new SolidColorBrush(Color.Parse("#343C50")) };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
-        var properties = new StackPanel { Spacing = 6 };
+        var properties = new StackPanel { Spacing = 8 };
+        editingProperties = properties;
         properties.Children.Add(new TextBlock { Text = "ВЫБРАННЫЙ СТИКЕР", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
         properties.Children.Add(new TextBlock { Text = "РЕЖИМ ПОДГОНКИ", FontWeight = FontWeight.Bold });
@@ -233,11 +246,12 @@ public sealed class MainWindow : Window
         properties.Children.Add(new TextBlock { Text = "ТОЧНАЯ НАСТРОЙКА", FontWeight = FontWeight.Bold });
         foreach (var (label, slider) in new[] { (scaleLabel, scale), (rotationLabel, rotation), (offsetXLabel, offsetX), (offsetYLabel, offsetY) })
         {
-            properties.Children.Add(label);
             var input = CreateSliderInput(slider, ReferenceEquals(slider, scale) ? 100 : 1);
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,90"), ColumnSpacing = 6 };
-            slider.MinWidth = 40; Grid.SetColumn(slider, 0); row.Children.Add(slider);
-            Grid.SetColumn(input, 1); row.Children.Add(input); properties.Children.Add(row);
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"), ColumnSpacing = 8 };
+            label.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(label);
+            Grid.SetColumn(input, 1); row.Children.Add(input);
+            var parameter = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
+            parameter.Children.Add(row); parameter.Children.Add(slider); properties.Children.Add(parameter);
             slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) { UpdateTransformLabels(); await TransformChangedAsync(); } };
             if (ReferenceEquals(slider, rotation))
             {
@@ -296,7 +310,8 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        var propertiesPanel = new Border { Background = new SolidColorBrush(Color.Parse("#192130")), CornerRadius = new CornerRadius(10), Padding = new Thickness(12), Child = new ScrollViewer { Content = properties, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
+        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties); propertyContent.Children.Add(properties);
+        var propertiesPanel = new Border { Background = new SolidColorBrush(Color.Parse("#192130")), CornerRadius = new CornerRadius(10), Padding = new Thickness(12), Child = new ScrollViewer { Content = propertyContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
         propertiesSide = propertiesPanel;
         Grid.SetColumn(propertiesPanel, 4); columns.Children.Add(propertiesPanel);
         gallerySplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(true), DispatcherPriority.Loaded));
@@ -363,55 +378,64 @@ public sealed class MainWindow : Window
         if (previewViewbox is null || previewCanvas is null || double.IsNaN(previewViewbox.Width)) return;
         if (Math.Min(previewCanvas.Bounds.Width - 40, previewCanvas.Bounds.Height - 40) < previewViewbox.Width) FitPreview();
     }
-    private static NumericUpDown CreateSliderInput(Slider slider, double factor)
+    private static TextBox CreateSliderInput(Slider slider, double factor)
     {
-        var input = new NumericUpDown { Minimum = (decimal)(slider.Minimum * factor), Maximum = (decimal)(slider.Maximum * factor),
-            Increment = 1, FormatString = "0", MinWidth = 90, Value = (decimal)Math.Round(slider.Value * factor) };
-        var synchronizing = false;
+        var input = new TextBox { MinWidth = 100, Height = 34, VerticalAlignment = VerticalAlignment.Center,
+            Text = Math.Round(slider.Value * factor).ToString(CultureInfo.CurrentCulture) };
+        void Refresh() => input.Text = Math.Round(slider.Value * factor).ToString(CultureInfo.CurrentCulture);
+        void Commit()
+        {
+            if (double.TryParse(input.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value) && double.IsFinite(value))
+                slider.Value = Math.Clamp(value / factor, slider.Minimum, slider.Maximum);
+            Refresh();
+        }
         slider.PropertyChanged += (_, e) =>
         {
-            if (e.Property != RangeBase.ValueProperty || synchronizing) return;
-            synchronizing = true; input.Value = (decimal)Math.Round(slider.Value * factor); synchronizing = false;
+            if (e.Property == RangeBase.ValueProperty && !input.IsKeyboardFocusWithin) Refresh();
         };
-        input.ValueChanged += (_, _) =>
-        {
-            if (synchronizing || input.Value is not { } value) return;
-            synchronizing = true; slider.Value = (double)value / factor; synchronizing = false;
-        };
+        input.LostFocus += (_, _) => Commit();
+        input.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
         return input;
     }
-    private void ToggleGallery() { layout = layout with { GalleryVisible = !layout.GalleryVisible }; ApplyPanelLayout(); }
+    private void ToggleGallery()
+    {
+        if (layout.GalleryVisible && galleryPanel is { IsVisible: false })
+            layout = layout with { PropertiesVisible = false };
+        else layout = layout with { GalleryVisible = !layout.GalleryVisible };
+        ApplyPanelLayout();
+    }
     private void ToggleProperties() { layout = layout with { PropertiesVisible = !layout.PropertiesVisible }; ApplyPanelLayout(); }
     private void CapturePanelWidth(bool gallerySide)
     {
         if (workspaceGrid is null) return;
-        if (gallerySide && layout.GalleryVisible) layout = layout with { GalleryWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[0].ActualWidth, 180, 600) };
-        if (!gallerySide && layout.PropertiesVisible) layout = layout with { PropertiesWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[4].ActualWidth, 220, 500) };
+        if (gallerySide && galleryPanel is { IsVisible: true }) layout = layout with { GalleryWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[0].ActualWidth, 180, 600) };
+        if (!gallerySide && layout.PropertiesVisible) layout = layout with { PropertiesWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[4].ActualWidth, 270, 500) };
     }
     private void ApplyPanelLayout()
     {
         if (workspaceGrid is null || galleryPanel is null || propertiesSide is null || gallerySplitter is null || propertiesSplitter is null) return;
-        galleryPanel.IsVisible = gallerySplitter.IsVisible = layout.GalleryVisible;
+        var showGallery = layout.GalleryVisible && (!layout.PropertiesVisible || ClientSize.Width >= 898);
+        galleryPanel.IsVisible = gallerySplitter.IsVisible = showGallery;
         propertiesSide.IsVisible = propertiesSplitter.IsVisible = layout.PropertiesVisible;
         var columns = workspaceGrid.ColumnDefinitions;
-        columns[0].MinWidth = layout.GalleryVisible ? 180 : 0; columns[4].MinWidth = layout.PropertiesVisible ? 220 : 0;
-        columns[1].Width = new GridLength(layout.GalleryVisible ? 6 : 0); columns[3].Width = new GridLength(layout.PropertiesVisible ? 6 : 0);
-        var leftWidth = layout.GalleryVisible ? layout.GalleryWidth : 0;
-        var rightWidth = layout.PropertiesVisible ? layout.PropertiesWidth : 0;
-        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 16 - 240 - (layout.GalleryVisible ? 6 : 0) - (layout.PropertiesVisible ? 6 : 0));
+        columns[0].MinWidth = showGallery ? 180 : 0; columns[4].MinWidth = layout.PropertiesVisible ? 270 : 0;
+        columns[1].Width = new GridLength(showGallery ? 6 : 0); columns[3].Width = new GridLength(layout.PropertiesVisible ? 6 : 0);
+        var leftWidth = showGallery ? layout.GalleryWidth : 0;
+        var rightWidth = layout.PropertiesVisible ? Math.Max(270, layout.PropertiesWidth) : 0;
+        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 16 - 400 - (showGallery ? 6 : 0) - (layout.PropertiesVisible ? 6 : 0));
         var excess = Math.Max(0, leftWidth + rightWidth - available);
-        var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (layout.GalleryVisible ? 180 : 0)));
+        var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         leftWidth -= leftReduction; excess -= leftReduction;
-        var rightReduction = Math.Min(excess, Math.Max(0, rightWidth - (layout.PropertiesVisible ? 220 : 0)));
+        var rightReduction = Math.Min(excess, Math.Max(0, rightWidth - (layout.PropertiesVisible ? 270 : 0)));
         rightWidth -= rightReduction; excess -= rightReduction;
-        leftWidth -= Math.Min(excess, Math.Max(0, leftWidth - (layout.GalleryVisible ? 180 : 0)));
+        leftWidth -= Math.Min(excess, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         columns[0].Width = new GridLength(leftWidth); columns[4].Width = new GridLength(rightWidth);
         columns[2].Width = new GridLength(1, GridUnitType.Star);
     }
 
     private static Button Button(string text, Func<Task> action, string? tooltip = null)
     {
-        var button = new Button { Content = text, Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(10, 6), MinHeight = 34 };
+        var button = new Button { Content = text, Margin = new Thickness(0, 0, 6, 4) };
         if (tooltip is not null) ToolTip.SetTip(button, tooltip);
         button.Click += async (_, _) => await action();
         return button;
@@ -630,7 +654,7 @@ public sealed class MainWindow : Window
     {
         HorizontalAlignment = horizontal, VerticalAlignment = vertical, Margin = new Thickness(4), Padding = new Thickness(5, 2),
         Background = new SolidColorBrush(Color.Parse("#D9212938")), CornerRadius = new CornerRadius(4),
-        Child = new TextBlock { Text = text, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White }
+        Child = new TextBlock { Text = text, FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White }
     };
     private static string LocalizeError(string text)
     {
@@ -674,7 +698,11 @@ public sealed class MainWindow : Window
     {
         var count = gallery.SelectedItems?.Count ?? 0;
         selectionCount.Text = count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}";
-        if (exportButton is not null) exportButton.Content = $"Экспортировать стикеры ({project.Stickers.Count})";
+        if (exportButton is not null) { exportButton.Content = $"Экспортировать стикеры ({project.Stickers.Count})"; exportButton.IsEnabled = project.Stickers.Count > 0 && !busy; }
+        var hasSelection = SelectedEntry() is not null;
+        if (editingProperties is not null) editingProperties.IsVisible = hasSelection;
+        emptyProperties.IsVisible = !hasSelection; emptyCanvas.IsVisible = !hasSelection;
+        if (previewViewbox is not null) previewViewbox.IsVisible = hasSelection;
         if (applySelectedButton is not null) applySelectedButton.IsEnabled = count > 1;
         groupPanel.IsVisible = count > 1;
         groupDescription.Text = $"Настройки текущего стикера будут применены к {count} выделенным файлам. Изображения и оригиналы не изменятся.";
@@ -905,10 +933,10 @@ public sealed class MainWindow : Window
     }
     private void UpdateTransformLabels()
     {
-        scaleLabel.Text = $"Масштаб изображения: {scale.Value * 100:0}%";
-        rotationLabel.Text = $"Поворот: {rotation.Value:0}°";
-        offsetXLabel.Text = $"По горизонтали: {offsetX.Value:0} пикс.";
-        offsetYLabel.Text = $"По вертикали: {offsetY.Value:0} пикс.";
+        scaleLabel.Text = "Масштаб, %";
+        rotationLabel.Text = "Поворот, °";
+        offsetXLabel.Text = "Положение X";
+        offsetYLabel.Text = "Положение Y";
     }
     private void RotateBy(double degrees) => rotation.Value = ((rotation.Value + degrees + 180) % 360 + 360) % 360 - 180;
     private void ResetGeometry(bool resetFlips = false)

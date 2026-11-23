@@ -43,6 +43,11 @@ public sealed class WindowLayoutTests
                     var grid = (Grid)typeof(MainWindow).GetField("workspaceGrid", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var canvas = (Border)typeof(MainWindow).GetField("previewCanvas", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var viewbox = (Viewbox)typeof(MainWindow).GetField("previewViewbox", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var emptyCanvas = (TextBlock)typeof(MainWindow).GetField("emptyCanvas", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var emptyProperties = (TextBlock)typeof(MainWindow).GetField("emptyProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var editing = (StackPanel)typeof(MainWindow).GetField("editingProperties", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var export = (Button)typeof(MainWindow).GetField("exportButton", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    Assert.True(emptyCanvas.IsVisible); Assert.True(emptyProperties.IsVisible); Assert.False(editing.IsVisible); Assert.False(export.IsEnabled);
                     void CheckCanvasFits()
                     {
                         var child = (Control)viewbox.Child!;
@@ -52,23 +57,30 @@ public sealed class WindowLayoutTests
                         Assert.InRange(last.X, 0, canvas.Bounds.Width + 1); Assert.InRange(last.Y, 0, canvas.Bounds.Height + 1);
                     }
                     window.Width = 820; window.Height = 520; await Task.Delay(100);
-                    Assert.True(grid.ColumnDefinitions[2].ActualWidth >= 220);
+                    Assert.True(grid.ColumnDefinitions[2].ActualWidth >= 400);
+                    Assert.Equal(0, grid.ColumnDefinitions[0].ActualWidth);
                     Assert.True(grid.Bounds.Width <= 820);
-                    typeof(MainWindow).GetMethod("ActualPreviewSize", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null); await Task.Delay(100); CheckCanvasFits();
-                    window.Width = 1280; window.Height = 720; await Task.Delay(100);
-                    Assert.True(grid.ColumnDefinitions[2].ActualWidth >= 220); CheckCanvasFits();
+                    window.Width = 1280; window.Height = 800; await Task.Delay(100);
+                    Assert.True(grid.ColumnDefinitions[2].ActualWidth >= 400); Assert.True(grid.ColumnDefinitions[0].ActualWidth >= 180);
                     window.Width = 1920; window.Height = 1080; await Task.Delay(100);
-                    Assert.True(grid.ColumnDefinitions[2].ActualWidth > 600); CheckCanvasFits();
+                    Assert.True(grid.ColumnDefinitions[2].ActualWidth > 600);
                     var imagePath = Path.Combine(directory, "sample.png");
                     using (var bitmap = new SKBitmap(32, 24)) using (var image = SKImage.FromBitmap(bitmap)) using (var png = image.Encode(SKEncodedImageFormat.Png, 100)) File.WriteAllBytes(imagePath, png.ToArray());
                     await (Task)typeof(MainWindow).GetMethod("ImportAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [new[] { imagePath }])!;
                     var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     gallery.SelectedIndex = 0; await Task.Delay(100);
+                    Assert.False(emptyCanvas.IsVisible); Assert.False(emptyProperties.IsVisible); Assert.True(editing.IsVisible); Assert.True(export.IsEnabled);
+                    var inputs = editing.GetVisualDescendants().OfType<TextBox>().ToArray();
+                    Assert.Equal(4, inputs.Length);
+                    foreach (var input in inputs)
+                    { Assert.InRange(input.Bounds.Width, 99, 101); Assert.InRange(input.Bounds.Height, 33, 35); }
                     var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var transformBefore = JsonSerializer.Serialize(project.Stickers[0].Transform);
                     typeof(MainWindow).GetMethod("ActualPreviewSize", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null); await Task.Delay(100); CheckCanvasFits();
                     typeof(MainWindow).GetMethod("FitPreview", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
                     Assert.Equal(transformBefore, JsonSerializer.Serialize(project.Stickers[0].Transform));
+                    foreach (var (width, height) in new[] { (820, 520), (1280, 800), (1920, 1080) })
+                    { window.Width = width; window.Height = height; await Task.Delay(100); Assert.True(grid.ColumnDefinitions[2].ActualWidth >= 400); CheckCanvasFits(); }
                     var card = Assert.IsType<ListBoxItem>(gallery.SelectedItem);
                     var presenter = card.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
                     Assert.Equal(Color.Parse("#302841"), Assert.IsType<SolidColorBrush>(presenter.Background).Color);

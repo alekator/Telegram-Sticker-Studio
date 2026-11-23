@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace StickerForge.Infrastructure;
 
-public sealed record PanelLayout(double GalleryWidth = 320, double PropertiesWidth = 280, bool GalleryVisible = true, bool PropertiesVisible = true);
+public sealed record PanelLayout(double GalleryWidth = 270, double PropertiesWidth = 300, bool GalleryVisible = true, bool PropertiesVisible = true);
 
 public sealed class PanelLayoutStore
 {
