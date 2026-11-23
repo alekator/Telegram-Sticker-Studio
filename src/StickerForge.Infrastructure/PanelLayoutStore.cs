@@ -16,7 +16,7 @@ public sealed class PanelLayoutStore
             if (!File.Exists(path)) return new();
             var layout = JsonSerializer.Deserialize<PanelLayout>(File.ReadAllText(path));
             if (layout is null || !double.IsFinite(layout.GalleryWidth) || !double.IsFinite(layout.PropertiesWidth)) return new();
-            return layout with { GalleryWidth = Math.Clamp(layout.GalleryWidth, 180, 600), PropertiesWidth = Math.Clamp(layout.PropertiesWidth, 200, 500) };
+            return layout with { GalleryWidth = Math.Clamp(layout.GalleryWidth, 180, 600), PropertiesWidth = Math.Clamp(layout.PropertiesWidth, 220, 500) };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return new(); }
     }

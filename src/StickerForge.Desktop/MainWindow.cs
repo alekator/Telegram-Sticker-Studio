@@ -66,16 +66,20 @@ public sealed class MainWindow : Window
     private readonly Slider rotation = new() { Minimum = -180, Maximum = 180 };
     private readonly CheckBox flipHorizontal = new() { Content = "По горизонтали" };
     private readonly CheckBox flipVertical = new() { Content = "По вертикали" };
-    private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .1m, FormatString = "0.0" };
-    private readonly NumericUpDown fragmentDuration = new() { Minimum = .1m, Maximum = 3, Increment = .1m, Value = 3, FormatString = "0.0" };
+    private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .05m, FormatString = "0.00", Width = 110, MinWidth = 110 };
+    private readonly NumericUpDown fragmentDuration = new() { Minimum = .01m, Maximum = 3, Increment = .05m, Value = 3, FormatString = "0.00", Width = 110, MinWidth = 110 };
     private readonly TextBlock scaleLabel = new();
     private readonly TextBlock rotationLabel = new();
     private readonly TextBlock offsetXLabel = new();
     private readonly TextBlock offsetYLabel = new();
-    private readonly WrapPanel animationPanel = new() { Orientation = Orientation.Horizontal };
+    private readonly StackPanel animationPanel = new() { Spacing = 4 };
+    private readonly AnimationTimeline timeline = new();
+    private readonly TextBlock sourceDurationLabel = new();
+    private double animationDuration;
+    private bool updatingFragment;
     private readonly Border animationBar = new() { IsVisible = false };
     private readonly StackPanel groupPanel = new() { IsVisible = false, Spacing = 8 };
-    private readonly TextBlock groupDescription = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .8 };
+    private readonly TextBlock groupDescription = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13, Opacity = .8 };
     private bool updatingTransform;
     private PointerPressedEventArgs? dragPress;
     private Point dragStart;
@@ -95,6 +99,7 @@ public sealed class MainWindow : Window
     private GridSplitter? gallerySplitter;
     private GridSplitter? propertiesSplitter;
     private Viewbox? previewViewbox;
+    private Border? previewCanvas;
 
     public MainWindow(PanelLayoutStore? layoutStore = null)
     {
@@ -133,7 +138,7 @@ public sealed class MainWindow : Window
         workspaceGrid = columns;
         columns.ColumnDefinitions[0].MinWidth = 180; columns.ColumnDefinitions[0].MaxWidth = 600;
         columns.ColumnDefinitions[2].MinWidth = 220;
-        columns.ColumnDefinitions[4].MinWidth = 200; columns.ColumnDefinitions[4].MaxWidth = 500;
+        columns.ColumnDefinitions[4].MinWidth = 220; columns.ColumnDefinitions[4].MaxWidth = 500;
         var left = new DockPanel();
         var galleryTitle = new TextBlock { Text = "СТИКЕРЫ", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
         DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
@@ -186,6 +191,8 @@ public sealed class MainWindow : Window
         var viewbox = new Viewbox { Stretch = Stretch.Uniform, Child = stickerBoundary };
         previewViewbox = viewbox;
         var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = viewbox, ClipToBounds = true };
+        previewCanvas = canvas;
+        canvas.SizeChanged += (_, _) => EnsurePreviewFits();
         canvas.PointerPressed += (_, e) =>
         {
             if (SelectedEntry() is null || !e.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
@@ -213,7 +220,7 @@ public sealed class MainWindow : Window
         };
         var center = new DockPanel { Margin = new Thickness(4, 0) };
         animationBar.Background = new SolidColorBrush(Color.Parse("#192130")); animationBar.CornerRadius = new CornerRadius(8); animationBar.Padding = new Thickness(8, 4); animationBar.Margin = new Thickness(0, 6, 0, 0);
-        animationBar.Child = new ScrollViewer { Content = animationPanel, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        animationBar.Child = new ScrollViewer { Content = animationPanel, MaxHeight = 165, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         DockPanel.SetDock(animationBar, Dock.Bottom); center.Children.Add(animationBar); center.Children.Add(canvas);
         Grid.SetColumn(center, 2); columns.Children.Add(center);
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = new SolidColorBrush(Color.Parse("#343C50")) };
@@ -226,7 +233,11 @@ public sealed class MainWindow : Window
         properties.Children.Add(new TextBlock { Text = "ТОЧНАЯ НАСТРОЙКА", FontWeight = FontWeight.Bold });
         foreach (var (label, slider) in new[] { (scaleLabel, scale), (rotationLabel, rotation), (offsetXLabel, offsetX), (offsetYLabel, offsetY) })
         {
-            properties.Children.Add(label); properties.Children.Add(slider);
+            properties.Children.Add(label);
+            var input = CreateSliderInput(slider, ReferenceEquals(slider, scale) ? 100 : 1);
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,90"), ColumnSpacing = 6 };
+            slider.MinWidth = 40; Grid.SetColumn(slider, 0); row.Children.Add(slider);
+            Grid.SetColumn(input, 1); row.Children.Add(input); properties.Children.Add(row);
             slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) { UpdateTransformLabels(); await TransformChangedAsync(); } };
             if (ReferenceEquals(slider, rotation))
             {
@@ -244,11 +255,19 @@ public sealed class MainWindow : Window
         flipVertical.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
         fitMode.SelectionChanged += async (_, _) => await FitModeChangedAsync();
         properties.Children.Add(Button("Сбросить подгонку", ResetSelectedAsync));
-        animationPanel.Children.Add(new TextBlock { Text = "Фрагмент", FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
-        animationPanel.Children.Add(new TextBlock { Text = "Начало, с", VerticalAlignment = VerticalAlignment.Center }); fragmentStart.Width = 88; fragmentStart.Margin = new Thickness(5, 0, 10, 0); animationPanel.Children.Add(fragmentStart);
-        animationPanel.Children.Add(new TextBlock { Text = "Длительность, с", VerticalAlignment = VerticalAlignment.Center }); fragmentDuration.Width = 88; fragmentDuration.Margin = new Thickness(5, 0, 10, 0); animationPanel.Children.Add(fragmentDuration);
-        fragmentStart.ValueChanged += async (_, _) => await TransformChangedAsync();
-        fragmentDuration.ValueChanged += async (_, _) => await TransformChangedAsync();
+        var timelineHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        timelineHeader.Children.Add(new TextBlock { Text = "Фрагмент анимации", FontWeight = FontWeight.SemiBold });
+        Grid.SetColumn(sourceDurationLabel, 1); timelineHeader.Children.Add(sourceDurationLabel); animationPanel.Children.Add(timelineHeader);
+        animationPanel.Children.Add(timeline);
+        var timelineControls = new WrapPanel { Orientation = Orientation.Horizontal };
+        var startField = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 8, 0) };
+        startField.Children.Add(new TextBlock { Text = "Начало, сек." }); startField.Children.Add(fragmentStart); timelineControls.Children.Add(startField);
+        var durationField = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 8, 0) };
+        durationField.Children.Add(new TextBlock { Text = "Длительность, сек." }); durationField.Children.Add(fragmentDuration); timelineControls.Children.Add(durationField);
+        fragmentStart.ValueChanged += async (_, _) => await FragmentFieldsChangedAsync();
+        fragmentDuration.ValueChanged += async (_, _) => await FragmentFieldsChangedAsync();
+        timeline.RangeChanged += (start, duration) => { SetFragmentFields(start, duration); _ = TransformChangedAsync(); };
+        timeline.SeekRequested += seconds => _ = SeekAnimationAsync(seconds);
         applySelectedButton = Button("Применить настройки ко всем выделенным", ApplySelectedAsync);
         applySelectedButton.Content = new TextBlock { Text = "Применить настройки ко всем выделенным", TextWrapping = TextWrapping.Wrap };
         applySelectedButton.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -257,12 +276,11 @@ public sealed class MainWindow : Window
         groupPanel.Children.Add(groupDescription);
         groupPanel.Children.Add(applySelectedButton);
         gifPlay.Click += (_, _) => ToggleGif();
-        animationPanel.Children.Add(gifPlay);
+        timelineControls.Children.Add(gifPlay);
         videoPlay.Click += (_, _) => { if (videoPlayback is null) StartVideo(); else StopVideo(); };
-        animationPanel.Children.Add(videoPlay);
-        videoSeek.Width = 180; videoSeek.Margin = new Thickness(6, 0); videoTime.VerticalAlignment = VerticalAlignment.Center;
-        animationPanel.Children.Add(videoSeek);
-        animationPanel.Children.Add(videoTime);
+        timelineControls.Children.Add(videoPlay);
+        videoTime.VerticalAlignment = VerticalAlignment.Center; videoTime.Margin = new Thickness(6, 0);
+        timelineControls.Children.Add(videoTime); animationPanel.Children.Add(timelineControls);
         properties.Children.Add(groupPanel);
         properties.Children.Add(new TextBlock { Text = "МАСШТАБ ПРОСМОТРА", FontWeight = FontWeight.Bold });
         properties.Children.Add(Button("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }));
@@ -332,14 +350,43 @@ public sealed class MainWindow : Window
         dialog.Content = panel; await dialog.ShowDialog(this);
     }
     private void FitPreview() { if (previewViewbox is not null) { previewViewbox.Width = double.NaN; previewViewbox.Height = double.NaN; } }
-    private void ActualPreviewSize() { if (previewViewbox is not null) { var factor = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1; previewViewbox.Width = previewViewbox.Height = 512 / factor; } }
+    private void ActualPreviewSize()
+    {
+        if (previewViewbox is null || previewCanvas is null) return;
+        var size = 512 / (TopLevel.GetTopLevel(this)?.RenderScaling ?? 1);
+        if (Math.Min(previewCanvas.Bounds.Width - 40, previewCanvas.Bounds.Height - 40) < size)
+        { FitPreview(); status.Text = "Размер 1:1 не помещается; полотно показано целиком."; return; }
+        previewViewbox.Width = previewViewbox.Height = size;
+    }
+    private void EnsurePreviewFits()
+    {
+        if (previewViewbox is null || previewCanvas is null || double.IsNaN(previewViewbox.Width)) return;
+        if (Math.Min(previewCanvas.Bounds.Width - 40, previewCanvas.Bounds.Height - 40) < previewViewbox.Width) FitPreview();
+    }
+    private static NumericUpDown CreateSliderInput(Slider slider, double factor)
+    {
+        var input = new NumericUpDown { Minimum = (decimal)(slider.Minimum * factor), Maximum = (decimal)(slider.Maximum * factor),
+            Increment = 1, FormatString = "0", MinWidth = 90, Value = (decimal)Math.Round(slider.Value * factor) };
+        var synchronizing = false;
+        slider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != RangeBase.ValueProperty || synchronizing) return;
+            synchronizing = true; input.Value = (decimal)Math.Round(slider.Value * factor); synchronizing = false;
+        };
+        input.ValueChanged += (_, _) =>
+        {
+            if (synchronizing || input.Value is not { } value) return;
+            synchronizing = true; slider.Value = (double)value / factor; synchronizing = false;
+        };
+        return input;
+    }
     private void ToggleGallery() { layout = layout with { GalleryVisible = !layout.GalleryVisible }; ApplyPanelLayout(); }
     private void ToggleProperties() { layout = layout with { PropertiesVisible = !layout.PropertiesVisible }; ApplyPanelLayout(); }
     private void CapturePanelWidth(bool gallerySide)
     {
         if (workspaceGrid is null) return;
         if (gallerySide && layout.GalleryVisible) layout = layout with { GalleryWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[0].ActualWidth, 180, 600) };
-        if (!gallerySide && layout.PropertiesVisible) layout = layout with { PropertiesWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[4].ActualWidth, 200, 500) };
+        if (!gallerySide && layout.PropertiesVisible) layout = layout with { PropertiesWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[4].ActualWidth, 220, 500) };
     }
     private void ApplyPanelLayout()
     {
@@ -347,7 +394,7 @@ public sealed class MainWindow : Window
         galleryPanel.IsVisible = gallerySplitter.IsVisible = layout.GalleryVisible;
         propertiesSide.IsVisible = propertiesSplitter.IsVisible = layout.PropertiesVisible;
         var columns = workspaceGrid.ColumnDefinitions;
-        columns[0].MinWidth = layout.GalleryVisible ? 180 : 0; columns[4].MinWidth = layout.PropertiesVisible ? 200 : 0;
+        columns[0].MinWidth = layout.GalleryVisible ? 180 : 0; columns[4].MinWidth = layout.PropertiesVisible ? 220 : 0;
         columns[1].Width = new GridLength(layout.GalleryVisible ? 6 : 0); columns[3].Width = new GridLength(layout.PropertiesVisible ? 6 : 0);
         var leftWidth = layout.GalleryVisible ? layout.GalleryWidth : 0;
         var rightWidth = layout.PropertiesVisible ? layout.PropertiesWidth : 0;
@@ -355,7 +402,7 @@ public sealed class MainWindow : Window
         var excess = Math.Max(0, leftWidth + rightWidth - available);
         var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (layout.GalleryVisible ? 180 : 0)));
         leftWidth -= leftReduction; excess -= leftReduction;
-        var rightReduction = Math.Min(excess, Math.Max(0, rightWidth - (layout.PropertiesVisible ? 200 : 0)));
+        var rightReduction = Math.Min(excess, Math.Max(0, rightWidth - (layout.PropertiesVisible ? 220 : 0)));
         rightWidth -= rightReduction; excess -= rightReduction;
         leftWidth -= Math.Min(excess, Math.Max(0, leftWidth - (layout.GalleryVisible ? 180 : 0)));
         columns[0].Width = new GridLength(leftWidth); columns[4].Width = new GridLength(rightWidth);
@@ -364,7 +411,7 @@ public sealed class MainWindow : Window
 
     private static Button Button(string text, Func<Task> action, string? tooltip = null)
     {
-        var button = new Button { Content = text, Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(10, 6) };
+        var button = new Button { Content = text, Margin = new Thickness(0, 0, 6, 4), Padding = new Thickness(10, 6), MinHeight = 34 };
         if (tooltip is not null) ToolTip.SetTip(button, tooltip);
         button.Click += async (_, _) => await action();
         return button;
@@ -394,7 +441,7 @@ public sealed class MainWindow : Window
     private async Task NewAsync()
     {
         if (busy || !await ConfirmDiscardAsync()) return;
-        project = new(); projectPath = null; dirty = false; cache.Clear(); RefreshGallery();
+        project = new(); projectPath = null; dirty = false; cache.Clear(); FitPreview(); RefreshGallery();
     }
     private async Task OpenAsync()
     {
@@ -405,7 +452,7 @@ public sealed class MainWindow : Window
         if (path is null) return;
         try
         {
-            project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); RefreshGallery();
+            project = await store.LoadAsync(path); projectPath = path; dirty = false; cache.Clear(); FitPreview(); RefreshGallery();
             await LoadThumbnailsAsync();
             status.Text = "Проект открыт";
         }
@@ -583,7 +630,7 @@ public sealed class MainWindow : Window
     {
         HorizontalAlignment = horizontal, VerticalAlignment = vertical, Margin = new Thickness(4), Padding = new Thickness(5, 2),
         Background = new SolidColorBrush(Color.Parse("#D9212938")), CornerRadius = new CornerRadius(4),
-        Child = new TextBlock { Text = text, FontSize = 10, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White }
+        Child = new TextBlock { Text = text, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White }
     };
     private static string LocalizeError(string text)
     {
@@ -746,6 +793,8 @@ public sealed class MainWindow : Window
                 info = result.Info; cache[item.Id] = info;
             }
             animationBar.IsVisible = info.Video is not null || info.FrameDurations is { Length: > 1 };
+            animationDuration = info.Video?.DurationSeconds ?? (info.FrameDurations is { Length: > 1 } durationFrames ? durationFrames.Sum(x => Math.Max(x, 20)) / 1000d : 0);
+            if (animationBar.IsVisible) ConfigureFragment(item.Transform);
             var previewVideo = info.Video;
             if (previewVideo is null && info.FrameDurations is { Length: > 1 } && info.Format.Equals("Gif", StringComparison.OrdinalIgnoreCase))
             {
@@ -754,8 +803,10 @@ public sealed class MainWindow : Window
                 { status.Text = "Предпросмотр GIF работает без FFmpeg; вид экспортированного файла может немного отличаться."; }
             }
             if (generation != previewGeneration) return;
-            var firstFrame = info.FrameDurations is { Length: > 0 } frameDurations ? FrameAt(frameDurations, item.Transform.StartSeconds) : 0;
-            var bytes = previewVideo is { } initialVideo ? await ffmpeg.ReadTransformedFrameAsync(item.SourcePath, initialVideo, Math.Min(item.Transform.StartSeconds, Math.Max(0, initialVideo.DurationSeconds - .05)), CopyTransform(item.Transform)) : info.FrameDurations is not null
+            if (previewVideo is not null && info.Video is null) { animationDuration = previewVideo.DurationSeconds; ConfigureFragment(item.Transform); }
+            var initialStart = animationBar.IsVisible ? (double)(fragmentStart.Value ?? 0) : 0;
+            var firstFrame = info.FrameDurations is { Length: > 0 } frameDurations ? FrameAt(frameDurations, initialStart) : 0;
+            var bytes = previewVideo is { } initialVideo ? await ffmpeg.ReadTransformedFrameAsync(item.SourcePath, initialVideo, Math.Min(initialStart, Math.Max(0, initialVideo.DurationSeconds - .05)), CopyTransform(item.Transform)) : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, firstFrame))
                 : info.FfmpegStill ? await ffmpeg.ReadFrameAsync(item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (previewVideo is null) bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
@@ -768,7 +819,7 @@ public sealed class MainWindow : Window
             {
                 details.Text += $"\n{video.DurationSeconds:0.00} с · {video.FramesPerSecond?.ToString("0.##") ?? "?"} кадров/с";
                 videoPath = item.SourcePath; videoMetadata = video;
-                updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = Math.Min(item.Transform.StartSeconds, videoSeek.Maximum); updatingSeek = false;
+                updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = Math.Min(initialStart, videoSeek.Maximum); updatingSeek = false;
                 videoPlay.IsVisible = videoSeek.IsVisible = videoTime.IsVisible = true;
                 UpdateVideoTime(videoSeek.Value);
             }
@@ -776,18 +827,79 @@ public sealed class MainWindow : Window
             {
                 gifPath = item.SourcePath; gifDurations = durations; gifFrame = firstFrame;
                 details.Text += $"\n{durations.Sum() / 1000d:0.00} с · кадров: {durations.Length}";
-                gifPlay.IsVisible = true;
+                gifPlay.IsVisible = videoTime.IsVisible = true; UpdateVideoTime(initialStart);
             }
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception or TimeoutException or System.Text.Json.JsonException)
         { if (generation == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
     }
     private GalleryEntry? SelectedEntry() => (gallery.SelectedItem as ListBoxItem)?.Tag as GalleryEntry;
+    private void ConfigureFragment(TransformSettings transform)
+    {
+        sourceDurationLabel.Text = $"Источник: {FormatTime(animationDuration)}";
+        SetFragmentFields(transform.StartSeconds, transform.DurationSeconds);
+        videoTime.IsVisible = true;
+        UpdateVideoTime((double)(fragmentStart.Value ?? 0));
+    }
+    private void SetFragmentFields(double start, double duration)
+    {
+        if (animationDuration <= 0 || !double.IsFinite(animationDuration)) return;
+        var minimum = Math.Min(.05, animationDuration);
+        var maxStart = Math.Min(36000, Math.Max(0, animationDuration - minimum));
+        start = Math.Clamp(double.IsFinite(start) ? start : 0, 0, maxStart);
+        duration = Math.Clamp(double.IsFinite(duration) ? duration : minimum, minimum, Math.Min(3, animationDuration - start));
+        updatingFragment = true;
+        fragmentStart.Maximum = (decimal)maxStart;
+        fragmentDuration.Minimum = 0; fragmentDuration.Maximum = (decimal)Math.Min(3, animationDuration); fragmentDuration.Minimum = (decimal)minimum;
+        fragmentStart.Value = (decimal)start; fragmentDuration.Value = (decimal)duration;
+        updatingFragment = false;
+        SyncTimeline(Math.Clamp(timeline.Current, 0, animationDuration));
+    }
+    private async Task FragmentFieldsChangedAsync()
+    {
+        if (updatingTransform || updatingFragment || !animationBar.IsVisible) return;
+        SetFragmentFields((double)(fragmentStart.Value ?? 0), (double)(fragmentDuration.Value ?? .05m));
+        await TransformChangedAsync();
+    }
+    private void SyncTimeline(double current)
+    {
+        if (animationDuration <= 0) return;
+        timeline.SetState(animationDuration, (double)(fragmentStart.Value ?? 0), (double)(fragmentDuration.Value ?? .05m), current);
+    }
+    private async Task SeekAnimationAsync(double seconds)
+    {
+        if (videoPath is not null && videoMetadata is not null)
+        {
+            var playing = videoPlayback is not null;
+            StopVideo(); updatingSeek = true; videoSeek.Value = Math.Clamp(seconds, 0, videoSeek.Maximum); updatingSeek = false;
+            UpdateVideoTime(videoSeek.Value);
+            if (playing) StartVideo(); else await ShowSeekFrameAsync(videoPath, videoSeek.Value, ++previewGeneration);
+        }
+        else if (gifPath is { } path && gifDurations is { Length: > 0 } durations && SelectedEntry() is { } entry)
+        {
+            StopGif(); var index = FrameAt(durations, seconds); var generation = ++previewGeneration; var settings = CopyTransform(entry.Item.Transform);
+            try
+            {
+                var bytes = await Task.Run(() => RenderPreview(GifFrameReader.ReadFrame(path, index), settings));
+                if (generation != previewGeneration) return;
+                gifFrame = index; SetPreview(bytes); UpdateVideoTime(durations.Take(index).Sum(x => Math.Max(x, 20)) / 1000d);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+            { if (generation == previewGeneration) status.Text = $"Ошибка перемотки: {ex.Message}"; }
+        }
+    }
+    private static string FormatTime(double seconds)
+    {
+        var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return time.TotalHours >= 1 ? time.ToString(@"hh\:mm\:ss\.ff") : time.ToString(@"mm\:ss\.ff");
+    }
     private static TransformSettings CopyTransform(TransformSettings t) => new() { Fit = t.Fit, Scale = t.Scale, OffsetX = t.OffsetX, OffsetY = t.OffsetY, Rotation = t.Rotation, FlipHorizontal = t.FlipHorizontal, FlipVertical = t.FlipVertical, StartSeconds = t.StartSeconds, DurationSeconds = t.DurationSeconds };
     private void LoadTransform(TransformSettings t)
     {
-        updatingTransform = true;
-        fitMode.SelectedIndex = (int)t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; flipHorizontal.IsChecked = t.FlipHorizontal; flipVertical.IsChecked = t.FlipVertical; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .1, 3);
+        updatingTransform = true; updatingFragment = true;
+        fragmentStart.Maximum = 36000; fragmentDuration.Maximum = 3; fragmentDuration.Minimum = .01m;
+        fitMode.SelectedIndex = (int)t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; flipHorizontal.IsChecked = t.FlipHorizontal; flipVertical.IsChecked = t.FlipVertical; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .01, 3);
+        updatingFragment = false;
         updatingTransform = false;
         UpdateTransformLabels();
     }
@@ -820,15 +932,25 @@ public sealed class MainWindow : Window
         t.Scale = scale.Value; t.OffsetX = offsetX.Value; t.OffsetY = offsetY.Value; t.Rotation = rotation.Value;
         t.FlipHorizontal = flipHorizontal.IsChecked == true; t.FlipVertical = flipVertical.IsChecked == true;
         t.StartSeconds = (double)(fragmentStart.Value ?? 0); t.DurationSeconds = (double)(fragmentDuration.Value ?? 3);
+        SyncTimeline(t.StartSeconds);
         MarkDirty();
         if (!cache.TryGetValue(entry.Item.Id, out var info)) return;
-        if (videoMetadata is not null && videoPath == entry.Item.SourcePath) { if (videoPlayback is null) await ShowSeekFrameAsync(entry.Item.SourcePath, Math.Min(t.StartSeconds, videoSeek.Maximum), ++previewGeneration); else { StopVideo(); StartVideo(); } return; }
+        if (videoMetadata is not null && videoPath == entry.Item.SourcePath)
+        {
+            if (videoPlayback is null)
+            {
+                updatingSeek = true; videoSeek.Value = Math.Min(t.StartSeconds, videoSeek.Maximum); updatingSeek = false;
+                UpdateVideoTime(videoSeek.Value); await ShowSeekFrameAsync(entry.Item.SourcePath, videoSeek.Value, ++previewGeneration);
+            }
+            else { StopVideo(); StartVideo(); }
+            return;
+        }
         if (info.FrameDurations is not null)
         {
             if (gifPlayback is null)
             {
                 var frameGeneration = ++previewGeneration; var frameSettings = CopyTransform(t); var index = FrameAt(info.FrameDurations, frameSettings.StartSeconds);
-                try { var frame = await Task.Run(() => RenderPreview(GifFrameReader.ReadFrame(entry.Item.SourcePath, index), frameSettings)); if (frameGeneration == previewGeneration) { gifFrame = index; SetPreview(frame); } }
+                try { var frame = await Task.Run(() => RenderPreview(GifFrameReader.ReadFrame(entry.Item.SourcePath, index), frameSettings)); if (frameGeneration == previewGeneration) { gifFrame = index; SetPreview(frame); UpdateVideoTime(info.FrameDurations.Take(index).Sum(x => Math.Max(x, 20)) / 1000d); } }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { if (frameGeneration == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
             }
             return;
@@ -862,7 +984,11 @@ public sealed class MainWindow : Window
         using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
         preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
     }
-    private void UpdateVideoTime(double seconds) => videoTime.Text = $"{TimeSpan.FromSeconds(seconds).ToString(@"mm\:ss\.ff")} / {TimeSpan.FromSeconds(videoMetadata?.DurationSeconds ?? 0).ToString(@"mm\:ss\.ff")}";
+    private void UpdateVideoTime(double seconds)
+    {
+        videoTime.Text = $"{FormatTime(seconds)} / {FormatTime(animationDuration)}";
+        SyncTimeline(seconds);
+    }
     private void StopVideo()
     {
         videoPlayback?.Cancel(); videoPlayback = null; videoPlay.Content = "Воспроизвести";
@@ -977,6 +1103,7 @@ public sealed class MainWindow : Window
                 var transform = CopyTransform(SelectedEntry()?.Item.Transform ?? new());
                 var rendered = await Task.Run(() => RenderPreview(bytes, transform), source.Token);
                 source.Token.ThrowIfCancellationRequested(); SetPreview(rendered); gifFrame = next;
+                UpdateVideoTime(durations.Take(next).Sum(x => Math.Max(x, 20)) / 1000d);
             }
         }
         catch (OperationCanceledException) { }
