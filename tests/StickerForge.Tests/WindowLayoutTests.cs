@@ -24,6 +24,7 @@ public sealed class WindowLayoutTestApp : Application
     public override void Initialize() => Styles.Add(new FluentTheme());
 }
 
+[Collection("Avalonia Headless")]
 public sealed class WindowLayoutTests
 {
     [Fact]

@@ -7,9 +7,9 @@ namespace StickerForge.Desktop;
 
 public sealed class AnimationTimeline : Control
 {
-    private static readonly IBrush Track = new SolidColorBrush(Color.Parse("#3A4053"));
-    private static readonly IBrush Selection = new SolidColorBrush(Color.Parse("#8061DD"));
-    private static readonly IBrush Handle = new SolidColorBrush(Color.Parse("#E9E1FF"));
+    private static readonly IBrush Track = StudioTheme.TimelineTrack;
+    private static readonly IBrush Selection = StudioTheme.TimelineSelection;
+    private static readonly IBrush Handle = StudioTheme.TimelineHandle;
     private static readonly IPen Playhead = new Pen(Brushes.White, 2);
     private int dragging;
     public double Duration { get; private set; }
