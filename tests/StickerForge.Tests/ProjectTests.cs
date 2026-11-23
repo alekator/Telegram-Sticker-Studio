@@ -19,14 +19,16 @@ public sealed class ProjectTests : IDisposable
     public ProjectTests() => Directory.CreateDirectory(directory);
     public void Dispose() => Directory.Delete(directory, true);
 
-    [Fact]
-    public async Task TransformSettingsRoundTrip()
+    [Theory]
+    [InlineData(FitMode.Fill)]
+    [InlineData(FitMode.Manual)]
+    public async Task TransformSettingsRoundTrip(FitMode mode)
     {
         var path = Path.Combine(directory, "pack.json");
-        var item = new StickerItem { SourcePath = Path.Combine(directory, "source.png"), Transform = new TransformSettings { Fit = FitMode.Fill, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, StartSeconds = 1, DurationSeconds = 2 } };
+        var item = new StickerItem { SourcePath = Path.Combine(directory, "source.png"), Transform = new TransformSettings { Fit = mode, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, StartSeconds = 1, DurationSeconds = 2 } };
         var store = new ProjectStore(); await store.SaveAsync(new StickerProject { Stickers = [item] }, path);
         var saved = Assert.Single((await store.LoadAsync(path)).Stickers).Transform;
-        Assert.Equal(FitMode.Fill, saved.Fit); Assert.Equal(1.5, saved.Scale); Assert.Equal(20, saved.OffsetX); Assert.Equal(-30, saved.OffsetY); Assert.Equal(45, saved.Rotation); Assert.Equal(1, saved.StartSeconds); Assert.Equal(2, saved.DurationSeconds);
+        Assert.Equal(mode, saved.Fit); Assert.Equal(1.5, saved.Scale); Assert.Equal(20, saved.OffsetX); Assert.Equal(-30, saved.OffsetY); Assert.Equal(45, saved.Rotation); Assert.Equal(1, saved.StartSeconds); Assert.Equal(2, saved.DurationSeconds);
     }
 
     [Fact]

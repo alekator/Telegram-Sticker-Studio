@@ -90,6 +90,9 @@ public sealed class VideoIntegrationTests
             using var gifGenerator = Process.Start(makeGif)!; var gifErrors = await gifGenerator.StandardError.ReadToEndAsync(); await gifGenerator.WaitForExitAsync(); Assert.True(gifGenerator.ExitCode == 0, gifErrors);
             var gifReport = await new StickerPackExporter().ExportAsync([gif], dir, "gif-pack");
             Assert.True(gifReport.Errors.Count == 0, string.Join("; ", gifReport.Errors)); Assert.Equal(1, gifReport.Exported);
+            var gifService = new FfmpegService(); var gifMetadata = await gifService.ProbeAsync(gif);
+            using (var gifPreview = SKBitmap.Decode(await gifService.ReadTransformedFrameAsync(gif, gifMetadata, 0, new TransformSettings { Fit = FitMode.Manual, Scale = 1.2, Rotation = 20 })))
+            { Assert.NotNull(gifPreview); Assert.Equal(512, gifPreview.Width); Assert.Equal(512, gifPreview.Height); }
             var tiff = Path.Combine(dir, "sample.tiff");
             var makeTiff = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true };
             foreach (var arg in new[] { "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x48", "-frames:v", "1", "-y", tiff }) makeTiff.ArgumentList.Add(arg);

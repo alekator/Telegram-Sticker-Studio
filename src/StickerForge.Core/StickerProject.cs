@@ -14,7 +14,7 @@ public sealed class StickerItem
     public TransformSettings Transform { get; set; } = new();
 }
 
-public enum FitMode { Fit, Fill, Stretch }
+public enum FitMode { Fit, Fill, Stretch, Manual }
 
 public sealed class TransformSettings
 {

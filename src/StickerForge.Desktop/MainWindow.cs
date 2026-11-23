@@ -59,13 +59,20 @@ public sealed class MainWindow : Window
     private bool updatingSeek;
     private readonly Border dropZone = new() { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
     private readonly TextBlock galleryHint = new() { Text = "Перетащите файлы или папки сюда либо нажмите «Добавить файлы»", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4, 0, 4, 8) };
-    private readonly ComboBox fitMode = new() { ItemsSource = new[] { "Вписать целиком", "Заполнить с обрезкой", "Растянуть (искажает пропорции)" }, SelectedIndex = 0 };
+    private readonly ComboBox fitMode = new() { ItemsSource = new[] { "Вместить целиком", "Заполнить с обрезкой", "Растянуть (искажает пропорции)", "Вручную" }, SelectedIndex = 0 };
     private readonly Slider scale = new() { Minimum = .1, Maximum = 3, Value = 1 };
     private readonly Slider offsetX = new() { Minimum = -512, Maximum = 512 };
     private readonly Slider offsetY = new() { Minimum = -512, Maximum = 512 };
     private readonly Slider rotation = new() { Minimum = -180, Maximum = 180 };
     private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .1m, FormatString = "0.0" };
     private readonly NumericUpDown fragmentDuration = new() { Minimum = .1m, Maximum = 3, Increment = .1m, Value = 3, FormatString = "0.0" };
+    private readonly TextBlock scaleLabel = new();
+    private readonly TextBlock rotationLabel = new();
+    private readonly TextBlock offsetXLabel = new();
+    private readonly TextBlock offsetYLabel = new();
+    private readonly StackPanel animationPanel = new() { IsVisible = false, Spacing = 8 };
+    private readonly StackPanel groupPanel = new() { IsVisible = false, Spacing = 8 };
+    private readonly TextBlock groupDescription = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .8 };
     private bool updatingTransform;
     private PointerPressedEventArgs? dragPress;
     private Point dragStart;
@@ -147,6 +154,8 @@ public sealed class MainWindow : Window
         canvas.PointerPressed += (_, e) =>
         {
             if (SelectedEntry() is null || !e.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
+            var point = e.GetPosition(stickerBoundary);
+            if (point.X < 0 || point.Y < 0 || point.X > 512 || point.Y > 512) return;
             previewDragStart = e.GetPosition(canvas); previewStartX = offsetX.Value; previewStartY = offsetY.Value; e.Pointer.Capture(canvas);
         };
         canvas.PointerMoved += (_, e) =>
@@ -159,37 +168,51 @@ public sealed class MainWindow : Window
             offsetY.Value = Math.Clamp(previewStartY + (point.Y - start.Y) * 512 / size, offsetY.Minimum, offsetY.Maximum);
         };
         canvas.PointerReleased += (_, e) => { previewDragStart = null; e.Pointer.Capture(null); };
+        canvas.PointerWheelChanged += (_, e) =>
+        {
+            if (SelectedEntry() is null) return;
+            var point = e.GetPosition(stickerBoundary);
+            if (point.X < 0 || point.Y < 0 || point.X > 512 || point.Y > 512) return;
+            scale.Value = Math.Clamp(scale.Value * (e.Delta.Y > 0 ? 1.1 : 1 / 1.1), scale.Minimum, scale.Maximum);
+            e.Handled = true;
+        };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
         var properties = new StackPanel { Spacing = 12 };
         properties.Children.Add(new TextBlock { Text = "ВЫБРАННЫЙ СТИКЕР", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
-        properties.Children.Add(new TextBlock { Text = "ПОДГОНКА", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "РЕЖИМ ПОДГОНКИ", FontWeight = FontWeight.Bold });
         properties.Children.Add(fitMode);
-        foreach (var (label, slider) in new[] { ("Масштаб", scale), ("Положение по горизонтали", offsetX), ("Положение по вертикали", offsetY), ("Поворот", rotation) })
+        properties.Children.Add(new TextBlock { Text = "ТОЧНАЯ НАСТРОЙКА", FontWeight = FontWeight.Bold });
+        foreach (var (label, slider) in new[] { (scaleLabel, scale), (rotationLabel, rotation), (offsetXLabel, offsetX), (offsetYLabel, offsetY) })
         {
-            properties.Children.Add(new TextBlock { Text = label }); properties.Children.Add(slider);
-            slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) await TransformChangedAsync(); };
+            properties.Children.Add(label); properties.Children.Add(slider);
+            slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) { UpdateTransformLabels(); await TransformChangedAsync(); } };
         }
-        fitMode.SelectionChanged += async (_, _) => await TransformChangedAsync();
-        properties.Children.Add(new TextBlock { Text = "Начало фрагмента, с" }); properties.Children.Add(fragmentStart);
-        properties.Children.Add(new TextBlock { Text = "Длительность, до 3 с" }); properties.Children.Add(fragmentDuration);
+        fitMode.SelectionChanged += async (_, _) => await FitModeChangedAsync();
+        properties.Children.Add(Button("Сбросить подгонку", async () => { if (SelectedEntry() is null) return; ResetGeometry(); await TransformChangedAsync(); }));
+        animationPanel.Children.Add(new TextBlock { Text = "ФРАГМЕНТ АНИМАЦИИ", FontWeight = FontWeight.Bold });
+        animationPanel.Children.Add(new TextBlock { Text = "Начало фрагмента, с" }); animationPanel.Children.Add(fragmentStart);
+        animationPanel.Children.Add(new TextBlock { Text = "Длительность, до 3 с" }); animationPanel.Children.Add(fragmentDuration);
         fragmentStart.ValueChanged += async (_, _) => await TransformChangedAsync();
         fragmentDuration.ValueChanged += async (_, _) => await TransformChangedAsync();
-        properties.Children.Add(Button("Сбросить", async () => { if (SelectedEntry() is { } entry) { entry.Item.Transform = new(); LoadTransform(entry.Item.Transform); await TransformChangedAsync(); } }));
-        applySelectedButton = Button("Применить настройки к выделенным", async () => { if (SelectedEntry() is not { } entry) return; foreach (var row in gallery.SelectedItems?.OfType<ListBoxItem>() ?? []) if (row.Tag is GalleryEntry target) target.Item.Transform = CopyTransform(entry.Item.Transform); MarkDirty(); await SelectAsync(); });
-        applySelectedButton.Content = new TextBlock { Text = "Применить настройки к выделенным", TextWrapping = TextWrapping.Wrap };
+        applySelectedButton = Button("Применить настройки ко всем выделенным", async () => { if (SelectedEntry() is not { } entry) return; foreach (var row in gallery.SelectedItems?.OfType<ListBoxItem>() ?? []) if (row.Tag is GalleryEntry target) target.Item.Transform = CopyTransform(entry.Item.Transform); MarkDirty(); await SelectAsync(); });
+        applySelectedButton.Content = new TextBlock { Text = "Применить настройки ко всем выделенным", TextWrapping = TextWrapping.Wrap };
         applySelectedButton.HorizontalAlignment = HorizontalAlignment.Stretch;
         applySelectedButton.IsEnabled = false;
-        properties.Children.Add(applySelectedButton);
-        properties.Children.Add(new TextBlock { Text = "Копируются режим вписывания, масштаб, положение, поворот и параметры фрагмента текущего стикера.", TextWrapping = TextWrapping.Wrap, FontSize = 12, Opacity = .75 });
-        properties.Children.Add(Button("Показать целиком", () => { viewbox.Width = double.NaN; viewbox.Height = double.NaN; return Task.CompletedTask; }));
-        properties.Children.Add(Button("Реальный размер 512×512", () => { var factor = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1; viewbox.Width = viewbox.Height = 512 / factor; return Task.CompletedTask; }));
+        groupPanel.Children.Add(new TextBlock { Text = "ГРУППОВАЯ ПОДГОНКА", FontWeight = FontWeight.Bold });
+        groupPanel.Children.Add(groupDescription);
+        groupPanel.Children.Add(applySelectedButton);
         gifPlay.Click += (_, _) => ToggleGif();
-        properties.Children.Add(gifPlay);
+        animationPanel.Children.Add(gifPlay);
         videoPlay.Click += (_, _) => { if (videoPlayback is null) StartVideo(); else StopVideo(); };
-        properties.Children.Add(videoPlay);
-        properties.Children.Add(videoSeek);
-        properties.Children.Add(videoTime);
+        animationPanel.Children.Add(videoPlay);
+        animationPanel.Children.Add(videoSeek);
+        animationPanel.Children.Add(videoTime);
+        properties.Children.Add(animationPanel);
+        properties.Children.Add(groupPanel);
+        properties.Children.Add(new TextBlock { Text = "МАСШТАБ ПРОСМОТРА", FontWeight = FontWeight.Bold });
+        properties.Children.Add(Button("Уместить в окно", () => { viewbox.Width = double.NaN; viewbox.Height = double.NaN; return Task.CompletedTask; }));
+        properties.Children.Add(Button("Показать 1:1", () => { var factor = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1; viewbox.Width = viewbox.Height = 512 / factor; return Task.CompletedTask; }));
         videoSeek.PropertyChanged += (_, e) =>
         {
             if (e.Property == RangeBase.ValueProperty && !updatingSeek && videoPath is not null)
@@ -390,6 +413,7 @@ public sealed class MainWindow : Window
     {
         ClearVideo();
         StopGif();
+        animationPanel.IsVisible = false;
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         refreshing = true;
         packName.Text = project.Name;
@@ -481,6 +505,8 @@ public sealed class MainWindow : Window
         selectionCount.Text = count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}";
         if (exportButton is not null) exportButton.Content = $"Экспортировать стикеры ({project.Stickers.Count})";
         if (applySelectedButton is not null) applySelectedButton.IsEnabled = count > 1;
+        groupPanel.IsVisible = count > 1;
+        groupDescription.Text = $"Настройки текущего стикера будут применены к {count} выделенным файлам. Изображения и оригиналы не изменятся.";
         foreach (var card in gallery.Items.OfType<ListBoxItem>())
         {
             if (card.Tag is not GalleryEntry entry) continue;
@@ -574,9 +600,14 @@ public sealed class MainWindow : Window
     {
         ClearVideo();
         StopGif();
+        animationPanel.IsVisible = false;
         gifPath = null; gifDurations = null; gifPlay.IsVisible = false;
         var generation = ++previewGeneration;
-        if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry }) return;
+        if (gallery.SelectedItem is not ListBoxItem { Tag: GalleryEntry entry })
+        {
+            details.Text = "Выберите стикер"; preview.Source = null; previewBitmap?.Dispose(); previewBitmap = null;
+            return;
+        }
         var item = entry.Item;
         LoadTransform(item.Transform);
         details.Text = $"Загрузка: {Path.GetFileName(item.SourcePath)}…";
@@ -589,32 +620,41 @@ public sealed class MainWindow : Window
                 if (result.Info is null) { details.Text = $"Не удалось прочитать файл: {LocalizeError(result.Error ?? "Неизвестная ошибка.")}"; return; }
                 info = result.Info; cache[item.Id] = info;
             }
+            animationPanel.IsVisible = info.Video is not null || info.FrameDurations is { Length: > 1 };
+            var previewVideo = info.Video;
+            if (previewVideo is null && info.FrameDurations is { Length: > 1 } && info.Format.Equals("Gif", StringComparison.OrdinalIgnoreCase))
+            {
+                try { previewVideo = await ffmpeg.ProbeAsync(item.SourcePath); }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or System.ComponentModel.Win32Exception or TimeoutException or System.Text.Json.JsonException)
+                { status.Text = "Предпросмотр GIF работает без FFmpeg; вид экспортированного файла может немного отличаться."; }
+            }
+            if (generation != previewGeneration) return;
             var firstFrame = info.FrameDurations is { Length: > 0 } frameDurations ? FrameAt(frameDurations, item.Transform.StartSeconds) : 0;
-            var bytes = info.Video is { } initialVideo ? await ffmpeg.ReadTransformedFrameAsync(item.SourcePath, initialVideo, Math.Min(item.Transform.StartSeconds, Math.Max(0, initialVideo.DurationSeconds - .05)), CopyTransform(item.Transform)) : info.FrameDurations is not null
+            var bytes = previewVideo is { } initialVideo ? await ffmpeg.ReadTransformedFrameAsync(item.SourcePath, initialVideo, Math.Min(item.Transform.StartSeconds, Math.Max(0, initialVideo.DurationSeconds - .05)), CopyTransform(item.Transform)) : info.FrameDurations is not null
                 ? await Task.Run(() => GifFrameReader.ReadFrame(item.SourcePath, firstFrame))
                 : info.FfmpegStill ? await ffmpeg.ReadFrameAsync(item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
-            if (info.Video is null) bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
+            if (previewVideo is null) bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
             if (generation != previewGeneration) return;
             using var stream = new MemoryStream(bytes);
             var bitmap = new Bitmap(stream);
             preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{SourceFormat(info, item.SourcePath)} · {info.Width} × {info.Height}\nГотов к подготовке";
-            if (info.Video is { } video)
+            if (previewVideo is { } video)
             {
                 details.Text += $"\n{video.DurationSeconds:0.00} с · {video.FramesPerSecond?.ToString("0.##") ?? "?"} кадров/с";
                 videoPath = item.SourcePath; videoMetadata = video;
-                updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = 0; updatingSeek = false;
+                updatingSeek = true; videoSeek.Maximum = Math.Max(0, video.DurationSeconds - 0.001); videoSeek.Value = Math.Min(item.Transform.StartSeconds, videoSeek.Maximum); updatingSeek = false;
                 videoPlay.IsVisible = videoSeek.IsVisible = videoTime.IsVisible = true;
-                UpdateVideoTime(0);
+                UpdateVideoTime(videoSeek.Value);
             }
-            if (info.FrameDurations is { Length: > 1 } durations)
+            if (previewVideo is null && info.FrameDurations is { Length: > 1 } durations)
             {
                 gifPath = item.SourcePath; gifDurations = durations; gifFrame = firstFrame;
                 details.Text += $"\n{durations.Sum() / 1000d:0.00} с · кадров: {durations.Length}";
                 gifPlay.IsVisible = true;
             }
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception or TimeoutException or System.Text.Json.JsonException)
         { if (generation == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
     }
     private GalleryEntry? SelectedEntry() => (gallery.SelectedItem as ListBoxItem)?.Tag as GalleryEntry;
@@ -624,16 +664,37 @@ public sealed class MainWindow : Window
         updatingTransform = true;
         fitMode.SelectedIndex = (int)t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .1, 3);
         updatingTransform = false;
+        UpdateTransformLabels();
+    }
+    private void UpdateTransformLabels()
+    {
+        scaleLabel.Text = $"Масштаб изображения: {scale.Value * 100:0}%";
+        rotationLabel.Text = $"Поворот: {rotation.Value:0}°";
+        offsetXLabel.Text = $"По горизонтали: {offsetX.Value:0} пикс.";
+        offsetYLabel.Text = $"По вертикали: {offsetY.Value:0} пикс.";
+    }
+    private void ResetGeometry()
+    {
+        updatingTransform = true;
+        scale.Value = 1; offsetX.Value = 0; offsetY.Value = 0; rotation.Value = 0;
+        updatingTransform = false;
+        UpdateTransformLabels();
+    }
+    private async Task FitModeChangedAsync()
+    {
+        if (updatingTransform || refreshing || busy || SelectedEntry() is null) return;
+        ResetGeometry();
+        await TransformChangedAsync();
     }
     private async Task TransformChangedAsync()
     {
         if (updatingTransform || refreshing || busy || SelectedEntry() is not { } entry) return;
-        var t = entry.Item.Transform; t.Fit = fitMode.SelectedIndex is >= 0 and <= 2 ? (FitMode)fitMode.SelectedIndex : FitMode.Fit;
+        var t = entry.Item.Transform; t.Fit = fitMode.SelectedIndex is >= 0 and <= 3 ? (FitMode)fitMode.SelectedIndex : FitMode.Fit;
         t.Scale = scale.Value; t.OffsetX = offsetX.Value; t.OffsetY = offsetY.Value; t.Rotation = rotation.Value;
         t.StartSeconds = (double)(fragmentStart.Value ?? 0); t.DurationSeconds = (double)(fragmentDuration.Value ?? 3);
         MarkDirty();
         if (!cache.TryGetValue(entry.Item.Id, out var info)) return;
-        if (info.Video is not null) { if (videoPlayback is null) await ShowSeekFrameAsync(entry.Item.SourcePath, Math.Min(t.StartSeconds, videoSeek.Maximum), ++previewGeneration); else { StopVideo(); StartVideo(); } return; }
+        if (videoMetadata is not null && videoPath == entry.Item.SourcePath) { if (videoPlayback is null) await ShowSeekFrameAsync(entry.Item.SourcePath, Math.Min(t.StartSeconds, videoSeek.Maximum), ++previewGeneration); else { StopVideo(); StartVideo(); } return; }
         if (info.FrameDurations is not null)
         {
             if (gifPlayback is null)

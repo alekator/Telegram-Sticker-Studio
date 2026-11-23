@@ -6,6 +6,19 @@ namespace StickerForge.Tests;
 
 public sealed class StickerPackExporterTests : IDisposable
 {
+    [Theory]
+    [InlineData(FitMode.Fit, 0)]
+    [InlineData(FitMode.Manual, 0)]
+    [InlineData(FitMode.Fill, 255)]
+    [InlineData(FitMode.Stretch, 255)]
+    public void FitModesProduceExpectedCanvas(FitMode mode, byte topAlpha)
+    {
+        using var source = SKImage.FromEncodedData(Image("modes.png", SKEncodedImageFormat.Png));
+        using var output = StickerPackExporter.Render(source, new TransformSettings { Fit = mode });
+        using var bitmap = SKBitmap.FromImage(output);
+        Assert.Equal(topAlpha, bitmap.GetPixel(256, 10).Alpha);
+        Assert.Equal(255, bitmap.GetPixel(256, 256).Alpha);
+    }
     [Fact]
     public async Task TransformChangesExportAndMatchesSharedRenderer()
     {
