@@ -101,7 +101,8 @@ public sealed class StickerPackExporter
             ffmpeg.RunEncoderAsync(["-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", manifest,
                 "-t", ((endTime - frameStart) / 1000d).ToString("0.########", CultureInfo.InvariantCulture), "-plays", "1", "-f", "apng", intermediate], token).GetAwaiter().GetResult();
             var settings = new TransformSettings { Fit = transform.Fit, Scale = transform.Scale, OffsetX = transform.OffsetX, OffsetY = transform.OffsetY,
-                Rotation = transform.Rotation, StartSeconds = (startMs - frameStart) / 1000, DurationSeconds = transform.DurationSeconds };
+                Rotation = transform.Rotation, FlipHorizontal = transform.FlipHorizontal, FlipVertical = transform.FlipVertical,
+                StartSeconds = (startMs - frameStart) / 1000, DurationSeconds = transform.DurationSeconds };
             return ConvertVideo(intermediate, settings, directory, token);
         }
         finally { Directory.Delete(work, true); }
@@ -153,7 +154,8 @@ public sealed class StickerPackExporter
         var width = Math.Clamp((int)Math.Round(metadata.Width * sx * scale), 1, 5120);
         var height = Math.Clamp((int)Math.Round(metadata.Height * sy * scale), 1, 5120);
         static string N(double n) => n.ToString("0.########", CultureInfo.InvariantCulture);
-        return $"[0:v]fps={N(fps)},format=rgba,scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
+        var flips = (transform.FlipHorizontal ? "hflip," : "") + (transform.FlipVertical ? "vflip," : "");
+        return $"[0:v]fps={N(fps)},format=rgba,{flips}scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
     }
 
     private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, CancellationToken token)
@@ -188,7 +190,7 @@ public sealed class StickerPackExporter
         var scale = (float)Math.Clamp(double.IsFinite(transform.Scale) ? transform.Scale : 1, 0.1, 10);
         canvas.Translate(Size / 2f + (float)transform.OffsetX, Size / 2f + (float)transform.OffsetY);
         canvas.RotateDegrees((float)transform.Rotation);
-        canvas.Scale(sx * scale, sy * scale);
+        canvas.Scale(sx * scale * (transform.FlipHorizontal ? -1 : 1), sy * scale * (transform.FlipVertical ? -1 : 1));
         canvas.DrawImage(image, SKRect.Create(-image.Width / 2f, -image.Height / 2f, image.Width, image.Height), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
         return surface.Snapshot();
     }

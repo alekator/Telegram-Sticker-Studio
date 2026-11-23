@@ -25,10 +25,22 @@ public sealed class ProjectTests : IDisposable
     public async Task TransformSettingsRoundTrip(FitMode mode)
     {
         var path = Path.Combine(directory, "pack.json");
-        var item = new StickerItem { SourcePath = Path.Combine(directory, "source.png"), Transform = new TransformSettings { Fit = mode, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, StartSeconds = 1, DurationSeconds = 2 } };
+        var item = new StickerItem { SourcePath = Path.Combine(directory, "source.png"), Transform = new TransformSettings { Fit = mode, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, FlipHorizontal = true, FlipVertical = true, StartSeconds = 1, DurationSeconds = 2 } };
         var store = new ProjectStore(); await store.SaveAsync(new StickerProject { Stickers = [item] }, path);
         var saved = Assert.Single((await store.LoadAsync(path)).Stickers).Transform;
-        Assert.Equal(mode, saved.Fit); Assert.Equal(1.5, saved.Scale); Assert.Equal(20, saved.OffsetX); Assert.Equal(-30, saved.OffsetY); Assert.Equal(45, saved.Rotation); Assert.Equal(1, saved.StartSeconds); Assert.Equal(2, saved.DurationSeconds);
+        Assert.Equal(mode, saved.Fit); Assert.Equal(1.5, saved.Scale); Assert.Equal(20, saved.OffsetX); Assert.Equal(-30, saved.OffsetY); Assert.Equal(45, saved.Rotation); Assert.True(saved.FlipHorizontal); Assert.True(saved.FlipVertical); Assert.Equal(1, saved.StartSeconds); Assert.Equal(2, saved.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task ExistingProjectWithoutReflectionSettingsKeepsOriginalOrientation()
+    {
+        var path = Path.Combine(directory, "old.json");
+        await File.WriteAllTextAsync(path, """
+            {"schemaVersion":1,"name":"old","stickers":[{"id":"11111111-1111-1111-1111-111111111111","sourcePath":"image.png","transform":{"fit":1,"scale":1.5,"offsetX":12,"rotation":90}}]}
+            """);
+        var transform = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers).Transform;
+        Assert.Equal(FitMode.Fill, transform.Fit); Assert.Equal(1.5, transform.Scale); Assert.Equal(12, transform.OffsetX); Assert.Equal(90, transform.Rotation);
+        Assert.False(transform.FlipHorizontal); Assert.False(transform.FlipVertical);
     }
 
     [Fact]
@@ -46,6 +58,7 @@ public sealed class ProjectTests : IDisposable
         var json = await File.ReadAllTextAsync(path);
         Assert.DoesNotContain(directory.Replace("\\", "\\\\"), json);
         var loaded = await store.LoadAsync(path);
+        Assert.False(loaded.Stickers[0].Transform.FlipHorizontal); Assert.False(loaded.Stickers[0].Transform.FlipVertical);
         Assert.Equal("Pack", loaded.Name);
         Assert.Equal(new[] { first, second }, loaded.Stickers.Select(x => x.SourcePath));
         Assert.False(File.Exists(loaded.Stickers[0].SourcePath));

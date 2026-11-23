@@ -7,6 +7,28 @@ namespace StickerForge.Tests;
 public sealed class StickerPackExporterTests : IDisposable
 {
     [Theory]
+    [InlineData(false, false, 255, 0)]
+    [InlineData(true, false, 0, 255)]
+    [InlineData(false, true, 255, 0)]
+    [InlineData(true, true, 0, 255)]
+    public async Task ReflectionsAreIndependentInPreviewAndExport(bool horizontal, bool vertical, byte expectedRed, byte expectedBlue)
+    {
+        using var bitmap = new SKBitmap(64, 64);
+        for (var y = 0; y < 64; y++) for (var x = 0; x < 64; x++)
+            bitmap.SetPixel(x, y, x < 32 ? (y < 32 ? SKColors.Red : SKColors.Yellow) : (y < 32 ? SKColors.Blue : SKColors.Cyan));
+        using var image = SKImage.FromBitmap(bitmap); using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+        var path = Path.Combine(directory, "quadrants.png"); File.WriteAllBytes(path, png.ToArray());
+        var settings = new TransformSettings { FlipHorizontal = horizontal, FlipVertical = vertical };
+        using var rendered = StickerPackExporter.Render(image, settings); using var preview = SKBitmap.FromImage(rendered);
+        var expected = preview.GetPixel(128, 128);
+        Assert.Equal(expectedRed, expected.Red); Assert.Equal(expectedBlue, expected.Blue);
+        Assert.Equal(vertical ? 255 : 0, expected.Green);
+        var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = path, Transform = settings }], directory, "flips");
+        Assert.Empty(report.Errors); using var exported = SKBitmap.Decode(Path.Combine(report.Directory, "001.webp"));
+        var actual = exported.GetPixel(128, 128);
+        Assert.InRange(Math.Abs(actual.Red - expected.Red), 0, 15); Assert.InRange(Math.Abs(actual.Green - expected.Green), 0, 15); Assert.InRange(Math.Abs(actual.Blue - expected.Blue), 0, 15);
+    }
+    [Theory]
     [InlineData(FitMode.Fit, 0)]
     [InlineData(FitMode.Manual, 0)]
     [InlineData(FitMode.Fill, 255)]
@@ -23,7 +45,7 @@ public sealed class StickerPackExporterTests : IDisposable
     public async Task TransformChangesExportAndMatchesSharedRenderer()
     {
         var path = Image("transform.png", SKEncodedImageFormat.Png);
-        var transform = new TransformSettings { Fit = FitMode.Fill, Scale = .75, OffsetX = 70, Rotation = 30 };
+        var transform = new TransformSettings { Fit = FitMode.Fill, Scale = .75, OffsetX = 70, OffsetY = -30, Rotation = 30, FlipHorizontal = true, FlipVertical = true };
         var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = path, Transform = transform }], directory, "transform");
         Assert.Empty(report.Errors);
         using var original = SKImage.FromEncodedData(path); using var rendered = StickerPackExporter.Render(original, transform);

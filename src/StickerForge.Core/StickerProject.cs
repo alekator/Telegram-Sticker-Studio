@@ -23,6 +23,8 @@ public sealed class TransformSettings
     public double OffsetX { get; set; }
     public double OffsetY { get; set; }
     public double Rotation { get; set; }
+    public bool FlipHorizontal { get; set; }
+    public bool FlipVertical { get; set; }
     public double StartSeconds { get; set; }
     public double DurationSeconds { get; set; } = 3;
 }

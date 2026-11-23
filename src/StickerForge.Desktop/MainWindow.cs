@@ -64,6 +64,8 @@ public sealed class MainWindow : Window
     private readonly Slider offsetX = new() { Minimum = -512, Maximum = 512 };
     private readonly Slider offsetY = new() { Minimum = -512, Maximum = 512 };
     private readonly Slider rotation = new() { Minimum = -180, Maximum = 180 };
+    private readonly CheckBox flipHorizontal = new() { Content = "По горизонтали" };
+    private readonly CheckBox flipVertical = new() { Content = "По вертикали" };
     private readonly NumericUpDown fragmentStart = new() { Minimum = 0, Maximum = 36000, Increment = .1m, FormatString = "0.0" };
     private readonly NumericUpDown fragmentDuration = new() { Minimum = .1m, Maximum = 3, Increment = .1m, Value = 3, FormatString = "0.0" };
     private readonly TextBlock scaleLabel = new();
@@ -148,7 +150,9 @@ public sealed class MainWindow : Window
         var layers = new Grid { Width = 512, Height = 512, ClipToBounds = true };
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
-        var stickerBoundary = new Border { Width = 512, Height = 512, BorderBrush = Brushes.LightGray, BorderThickness = new Thickness(1), Child = layers };
+        layers.Children.Add(new Border { BorderBrush = new SolidColorBrush(Color.Parse("#E6FFFFFF")), BorderThickness = new Thickness(2), IsHitTestVisible = false,
+            Child = new Border { BorderBrush = new SolidColorBrush(Color.Parse("#A6000000")), BorderThickness = new Thickness(1), IsHitTestVisible = false } });
+        var stickerBoundary = new Border { Width = 512, Height = 512, Child = layers };
         var viewbox = new Viewbox { Stretch = Stretch.Uniform, Child = stickerBoundary };
         var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = viewbox, ClipToBounds = true };
         canvas.PointerPressed += (_, e) =>
@@ -177,7 +181,7 @@ public sealed class MainWindow : Window
             e.Handled = true;
         };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
-        var properties = new StackPanel { Spacing = 12 };
+        var properties = new StackPanel { Spacing = 6 };
         properties.Children.Add(new TextBlock { Text = "ВЫБРАННЫЙ СТИКЕР", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
         properties.Children.Add(new TextBlock { Text = "РЕЖИМ ПОДГОНКИ", FontWeight = FontWeight.Bold });
@@ -187,9 +191,22 @@ public sealed class MainWindow : Window
         {
             properties.Children.Add(label); properties.Children.Add(slider);
             slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) { UpdateTransformLabels(); await TransformChangedAsync(); } };
+            if (ReferenceEquals(slider, rotation))
+            {
+                var rotationActions = new WrapPanel();
+                rotationActions.Children.Add(Button("↶ 90°", () => { RotateBy(-90); return Task.CompletedTask; }, "Повернуть на 90° влево"));
+                rotationActions.Children.Add(Button("↷ 90°", () => { RotateBy(90); return Task.CompletedTask; }, "Повернуть на 90° вправо"));
+                rotationActions.Children.Add(Button("Сбросить поворот", () => { rotation.Value = 0; return Task.CompletedTask; }));
+                properties.Children.Add(rotationActions);
+            }
         }
+        properties.Children.Add(new TextBlock { Text = "ОТРАЖЕНИЕ", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 0) });
+        var flipActions = new WrapPanel(); flipActions.Children.Add(flipHorizontal); flipActions.Children.Add(flipVertical); properties.Children.Add(flipActions);
+        flipHorizontal.Margin = new Thickness(0, 0, 12, 0);
+        flipHorizontal.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
+        flipVertical.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
         fitMode.SelectionChanged += async (_, _) => await FitModeChangedAsync();
-        properties.Children.Add(Button("Сбросить подгонку", async () => { if (SelectedEntry() is null) return; ResetGeometry(); await TransformChangedAsync(); }));
+        properties.Children.Add(Button("Сбросить подгонку", async () => { if (SelectedEntry() is null) return; ResetGeometry(resetFlips: true); await TransformChangedAsync(); }));
         animationPanel.Children.Add(new TextBlock { Text = "ФРАГМЕНТ АНИМАЦИИ", FontWeight = FontWeight.Bold });
         animationPanel.Children.Add(new TextBlock { Text = "Начало фрагмента, с" }); animationPanel.Children.Add(fragmentStart);
         animationPanel.Children.Add(new TextBlock { Text = "Длительность, до 3 с" }); animationPanel.Children.Add(fragmentDuration);
@@ -224,7 +241,7 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        var propertiesPanel = new Border { Background = new SolidColorBrush(Color.Parse("#192130")), CornerRadius = new CornerRadius(10), Padding = new Thickness(16), Child = new ScrollViewer { Content = properties } };
+        var propertiesPanel = new Border { Background = new SolidColorBrush(Color.Parse("#192130")), CornerRadius = new CornerRadius(10), Padding = new Thickness(12), Child = new ScrollViewer { Content = properties, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
         Grid.SetColumn(propertiesPanel, 2); columns.Children.Add(propertiesPanel);
         root.Children.Add(columns); Content = root;
         packName.TextChanged += (_, _) =>
@@ -658,11 +675,11 @@ public sealed class MainWindow : Window
         { if (generation == previewGeneration) details.Text = $"Не удалось показать файл: {ex.Message}"; }
     }
     private GalleryEntry? SelectedEntry() => (gallery.SelectedItem as ListBoxItem)?.Tag as GalleryEntry;
-    private static TransformSettings CopyTransform(TransformSettings t) => new() { Fit = t.Fit, Scale = t.Scale, OffsetX = t.OffsetX, OffsetY = t.OffsetY, Rotation = t.Rotation, StartSeconds = t.StartSeconds, DurationSeconds = t.DurationSeconds };
+    private static TransformSettings CopyTransform(TransformSettings t) => new() { Fit = t.Fit, Scale = t.Scale, OffsetX = t.OffsetX, OffsetY = t.OffsetY, Rotation = t.Rotation, FlipHorizontal = t.FlipHorizontal, FlipVertical = t.FlipVertical, StartSeconds = t.StartSeconds, DurationSeconds = t.DurationSeconds };
     private void LoadTransform(TransformSettings t)
     {
         updatingTransform = true;
-        fitMode.SelectedIndex = (int)t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .1, 3);
+        fitMode.SelectedIndex = (int)t.Fit; scale.Value = t.Scale; offsetX.Value = t.OffsetX; offsetY.Value = t.OffsetY; rotation.Value = t.Rotation; flipHorizontal.IsChecked = t.FlipHorizontal; flipVertical.IsChecked = t.FlipVertical; fragmentStart.Value = (decimal)Math.Clamp(t.StartSeconds, 0, 36000); fragmentDuration.Value = (decimal)Math.Clamp(t.DurationSeconds, .1, 3);
         updatingTransform = false;
         UpdateTransformLabels();
     }
@@ -673,10 +690,12 @@ public sealed class MainWindow : Window
         offsetXLabel.Text = $"По горизонтали: {offsetX.Value:0} пикс.";
         offsetYLabel.Text = $"По вертикали: {offsetY.Value:0} пикс.";
     }
-    private void ResetGeometry()
+    private void RotateBy(double degrees) => rotation.Value = ((rotation.Value + degrees + 180) % 360 + 360) % 360 - 180;
+    private void ResetGeometry(bool resetFlips = false)
     {
         updatingTransform = true;
         scale.Value = 1; offsetX.Value = 0; offsetY.Value = 0; rotation.Value = 0;
+        if (resetFlips) { flipHorizontal.IsChecked = false; flipVertical.IsChecked = false; }
         updatingTransform = false;
         UpdateTransformLabels();
     }
@@ -691,6 +710,7 @@ public sealed class MainWindow : Window
         if (updatingTransform || refreshing || busy || SelectedEntry() is not { } entry) return;
         var t = entry.Item.Transform; t.Fit = fitMode.SelectedIndex is >= 0 and <= 3 ? (FitMode)fitMode.SelectedIndex : FitMode.Fit;
         t.Scale = scale.Value; t.OffsetX = offsetX.Value; t.OffsetY = offsetY.Value; t.Rotation = rotation.Value;
+        t.FlipHorizontal = flipHorizontal.IsChecked == true; t.FlipVertical = flipVertical.IsChecked == true;
         t.StartSeconds = (double)(fragmentStart.Value ?? 0); t.DurationSeconds = (double)(fragmentDuration.Value ?? 3);
         MarkDirty();
         if (!cache.TryGetValue(entry.Item.Id, out var info)) return;
