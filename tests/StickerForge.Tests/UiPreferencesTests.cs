@@ -24,7 +24,7 @@ public sealed class UiPreferencesTests
             {
                 foreach (var language in new[] { "ru", "en" })
                 foreach (var populated in new[] { false, true })
-                foreach (var width in new[] { 700, 1280 })
+                foreach (var width in new[] { 700, 1280, 2560 })
                 {
                     var preferences = new UiPreferencesStore(Path.Combine(directory, $"{language}-{populated}-{width}.json"));
                     preferences.Save(new UiPreferences(language, "dark"));
@@ -61,6 +61,17 @@ public sealed class UiPreferencesTests
                         Assert.Contains(items, x => (string?)x.Header == (language == "en" ? "About" : "О программе"));
                         var editor = (Control)typeof(MainWindow).GetField("editorPage", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                         var page = (Control)typeof(MainWindow).GetField("settingsPage", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        var editorPosition = editor.TranslatePoint(new Point(0, 0), window)!.Value;
+                        Assert.InRange(editorPosition.X, 7, 9);
+                        Assert.InRange(editor.Bounds.Width, width - 17, width - 15);
+                        Assert.DoesNotContain(buttons, x => ToolTip.GetTip(x) is string tip && (tip == "Стикеры" || tip == "Stickers"));
+                        if (populated && width >= 1280)
+                        {
+                            var galleryPanel = (Control)typeof(MainWindow).GetField("galleryPanel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                            var galleryPosition = galleryPanel.TranslatePoint(new Point(0, 0), window)!.Value;
+                            Assert.True(galleryPanel.IsVisible);
+                            Assert.InRange(galleryPosition.X, 11, 13);
+                        }
                         var selected = gallery.SelectedItem;
                         var inactive = settings.Background;
                         settings.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

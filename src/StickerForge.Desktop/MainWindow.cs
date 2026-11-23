@@ -112,7 +112,6 @@ public sealed class MainWindow : Window
     private Control? editorPage;
     private Control? settingsPage;
     private ContextMenu? projectMenu;
-    private Button? stickersNavigation;
     private Button? settingsButton;
 
     public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null)
@@ -366,12 +365,7 @@ public sealed class MainWindow : Window
         editorPage = columns;
         settingsPage = CreateSettingsPage(); settingsPage.IsVisible = false;
         var pages = new Grid(); pages.Children.Add(columns); pages.Children.Add(settingsPage);
-        var navigation = new StackPanel { Width = 78, Spacing = 8, Margin = new Thickness(0, 0, 8, 0) };
-        stickersNavigation = NavButton("M4 5 L20 5 L20 19 L4 19 Z M8 15 L11 12 L14 15 L17 11 M8 9 L8.1 9", "Стикеры", () => { ShowEditor(); return Task.CompletedTask; });
-        stickersNavigation.Background = studioTheme.Selected;
-        navigation.Children.Add(stickersNavigation);
-        var shell = new DockPanel(); DockPanel.SetDock(navigation, Dock.Left); shell.Children.Add(navigation); shell.Children.Add(pages);
-        root.Children.Add(shell); Content = root;
+        root.Children.Add(pages); Content = root;
         StudioLocalization.Capture(root); ApplyPreferences();
         ActualThemeVariantChanged += (_, _) => { if (preferences.Theme == "system") studioTheme.Apply(ActualThemeVariant == ThemeVariant.Light); };
         packName.TextChanged += (_, _) =>
@@ -415,13 +409,12 @@ public sealed class MainWindow : Window
         }
         UpdateTransformLabels(); UpdateSelection();
     }
-    private void ShowEditor() { if (editorPage is not null) editorPage.IsVisible = true; if (settingsPage is not null) settingsPage.IsVisible = false; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Selected; if (settingsButton is not null) settingsButton.Background = studioTheme.Surface; }
+    private void ShowEditor() { if (editorPage is not null) editorPage.IsVisible = true; if (settingsPage is not null) settingsPage.IsVisible = false; if (settingsButton is not null) settingsButton.Background = studioTheme.Surface; }
     private Task ShowSettingsAsync()
     {
         if (settingsPage?.IsVisible == true) { ShowEditor(); return Task.CompletedTask; }
         if (editorPage is not null) editorPage.IsVisible = false;
         if (settingsPage is not null) settingsPage.IsVisible = true;
-        if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Surface;
         if (settingsButton is not null) settingsButton.Background = studioTheme.Selected;
         return Task.CompletedTask;
     }
@@ -465,12 +458,6 @@ public sealed class MainWindow : Window
         content.Children.Add(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center });
         button.Content = content;
         return button;
-    }
-    private Button NavButton(string path, string title, Func<Task> action)
-    {
-        var button = Button("", action, title); button.Background = studioTheme.Surface; button.Margin = new Thickness(0); button.Padding = new Thickness(4, 10);
-        var content = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
-        content.Children.Add(Icon(path, 22, studioTheme.Text)); content.Children.Add(new TextBlock { Text = title, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center }); button.Content = content; return button;
     }
     private async Task ResetSelectedAsync()
     {
@@ -556,7 +543,7 @@ public sealed class MainWindow : Window
         columns[1].Width = new GridLength(showGallery ? 6 : 0); columns[3].Width = new GridLength(showProperties ? 6 : 0);
         var leftWidth = showGallery ? Math.Min(layout.GalleryWidth, 300) : 0;
         var rightWidth = showProperties ? Math.Clamp(layout.PropertiesWidth, 270, 340) : 0;
-        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 102 - 400 - (showGallery ? 6 : 0) - (showProperties ? 6 : 0));
+        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 16 - 400 - (showGallery ? 6 : 0) - (showProperties ? 6 : 0));
         var excess = Math.Max(0, leftWidth + rightWidth - available);
         var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         leftWidth -= leftReduction; excess -= leftReduction;
