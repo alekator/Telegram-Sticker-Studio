@@ -111,6 +111,11 @@ public sealed class MainWindow : Window
     private readonly TextBlock emptyCanvas = new() { Text = "Перетащите файлы сюда или нажмите «Добавить файлы»", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 340, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock emptyProperties = new() { Text = "Выберите стикер для редактирования", TextWrapping = TextWrapping.Wrap };
     private StackPanel? editingProperties;
+    private Control? editorPage;
+    private Control? settingsPage;
+    private ContextMenu? projectMenu;
+    private Button? stickersNavigation;
+    private Button? settingsNavigation;
 
     public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null)
     {
@@ -120,10 +125,12 @@ public sealed class MainWindow : Window
         importer = new ImageImporter(new SkiaImageDecoder(), ffmpeg);
         Title = "StickerForge Studio";
         FontSize = 14;
-        Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)) } });
-        Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)) } });
+        Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)), new Setter(BackgroundProperty, studioTheme.Surface), new Setter(ForegroundProperty, studioTheme.Text) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
         Width = 1280; Height = 760; MinWidth = 700; MinHeight = 520;
         Background = studioTheme.Background; Foreground = studioTheme.Text; Resources["SystemAccentColor"] = studioTheme.Accent.Color;
+        Resources["SystemControlHighlightAccentBrush"] = studioTheme.Accent;
+        Resources["SystemControlHighlightListAccentLowBrush"] = studioTheme.Selected;
         layout = this.layoutStore.Load();
         var root = new DockPanel { Margin = new Thickness(8) };
         var menuBar = new Menu();
@@ -132,19 +139,25 @@ public sealed class MainWindow : Window
         menuBar.Items.Add(MenuGroup("Вид", MenuAction("Показать или скрыть галерею", () => { ToggleGallery(); return Task.CompletedTask; }), MenuAction("Показать или скрыть свойства", () => { ToggleProperties(); return Task.CompletedTask; }), MenuAction("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }), MenuAction("Показать 1:1", () => { ActualPreviewSize(); return Task.CompletedTask; })));
         menuBar.Items.Add(MenuGroup("Стикеры", MenuAction("Добавить файлы…", PickFilesAsync), MenuAction("Добавить папку…", PickFolderAsync), MenuAction("Переместить выше", () => MoveSelected(-1)), MenuAction("Переместить ниже", () => MoveSelected(1))));
         menuBar.Items.Add(MenuGroup("Помощь", MenuAction("О программе", ShowAboutAsync)));
-        DockPanel.SetDock(menuBar, Dock.Top); root.Children.Add(menuBar);
-        var top = new WrapPanel { Orientation = Orientation.Horizontal };
-        top.Children.Add(new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 17, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 12, 0) });
-        top.Children.Add(Button("Файлы", PickFilesAsync, "Добавить файлы · Ctrl+I"));
-        top.Children.Add(Button("Папка", PickFolderAsync, "Добавить папку"));
-        galleryToggle = Button("Галерея", () => { ToggleGallery(); return Task.CompletedTask; }, "Показать или скрыть галерею"); top.Children.Add(galleryToggle);
-        propertiesToggle = Button("Свойства", () => { ToggleProperties(); return Task.CompletedTask; }, "Показать или скрыть свойства"); top.Children.Add(propertiesToggle);
-        top.Children.Add(Button("Сохранить", async () => { await SaveAsync(false); }, "Сохранить проект · Ctrl+S"));
-        top.Children.Add(Button("Настройки", ShowSettingsAsync));
-        top.Children.Add(packName);
+        projectMenu = new ContextMenu();
+        foreach (var group in menuBar.Items.OfType<MenuItem>().ToArray()) { menuBar.Items.Remove(group); projectMenu.Items.Add(group); }
+        StudioLocalization.Capture(projectMenu);
+        var top = new DockPanel { LastChildFill = false };
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 24, 0) };
+        brand.Children.Add(new Border { Background = studioTheme.Accent, CornerRadius = new CornerRadius(8), Padding = new Thickness(7), Child = Icon("M3 12 L21 4 L16 20 L12 14 Z M12 14 L21 4", 20, Brushes.White) });
+        brand.Children.Add(new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16, VerticalAlignment = VerticalAlignment.Center });
+        DockPanel.SetDock(brand, Dock.Left); top.Children.Add(brand);
+        var projectButton = Button("☰", () => Task.CompletedTask, "Команды проекта");
+        projectButton.ContextMenu = projectMenu; projectButton.Click += (_, _) => projectMenu.Open(projectButton);
+        DockPanel.SetDock(projectButton, Dock.Left); top.Children.Add(projectButton);
+        packName.VerticalAlignment = VerticalAlignment.Center; DockPanel.SetDock(packName, Dock.Left); top.Children.Add(packName);
+        var settingsButton = IconButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", ShowSettingsAsync, "Настройки");
+        DockPanel.SetDock(settingsButton, Dock.Right); top.Children.Add(settingsButton);
+        propertiesToggle = Button("Свойства", () => { ToggleProperties(); return Task.CompletedTask; }, "Показать или скрыть свойства"); DockPanel.SetDock(propertiesToggle, Dock.Right); top.Children.Add(propertiesToggle);
+        galleryToggle = Button("Галерея", () => { ToggleGallery(); return Task.CompletedTask; }, "Показать или скрыть галерею"); DockPanel.SetDock(galleryToggle, Dock.Right); top.Children.Add(galleryToggle);
         exportButton = Button("Экспортировать стикеры", ExportAsync, "Подготовить файлы для Telegram");
         exportButton.Background = studioTheme.Accent; exportButton.Foreground = Brushes.White;
-        var toolbar = new Border { Child = top, Margin = new Thickness(0, 4, 0, 8) };
+        var toolbar = new Border { Child = top, Background = studioTheme.Panel, CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 5), Margin = new Thickness(0, 0, 0, 8) };
         DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
         var bottom = new DockPanel { Margin = new Thickness(0, 8, 0, 0), LastChildFill = true };
         DockPanel.SetDock(exportButton, Dock.Right); bottom.Children.Add(exportButton);
@@ -157,11 +170,11 @@ public sealed class MainWindow : Window
         columns.ColumnDefinitions[0].MinWidth = 180; columns.ColumnDefinitions[0].MaxWidth = 600;
         columns.ColumnDefinitions[2].MinWidth = 400;
         columns.ColumnDefinitions[4].MinWidth = 270; columns.ColumnDefinitions[4].MaxWidth = 500;
-        var left = new DockPanel();
-        var galleryTitle = new TextBlock { Text = "СТИКЕРЫ", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
-        DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
-        var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-        actions.Children.Add(Button("Добавить файлы", PickFilesAsync)); actions.Children.Add(Button("Удалить", RemoveSelected));
+        var left = new DockPanel { Margin = new Thickness(4, 0, 4, 0) };
+        var actions = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
+        var removeButton = IconButton("M4 6 L20 6 M9 6 L9 4 L15 4 L15 6 M6 6 L7 20 L17 20 L18 6 M10 9 L10 17 M14 9 L14 17", RemoveSelected, "Удалить выделенные");
+        DockPanel.SetDock(removeButton, Dock.Right); actions.Children.Add(removeButton);
+        var addGallery = Button("＋  Добавить файлы", PickFilesAsync); addGallery.Background = studioTheme.Accent; addGallery.Foreground = Brushes.White; addGallery.HorizontalContentAlignment = HorizontalAlignment.Center; actions.Children.Add(addGallery);
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
         DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
         DockPanel.SetDock(selectionCount, Dock.Top); left.Children.Add(selectionCount);
@@ -175,6 +188,7 @@ public sealed class MainWindow : Window
             if (scroller is not null && scrollDirection != 0) scroller.Offset = new Vector(scroller.Offset.X, Math.Max(0, scroller.Offset.Y + scrollDirection * 16));
         };
         gallery.ItemsPanel = new FuncTemplate<Panel?>(() => new WrapPanel());
+        gallery.Background = studioTheme.Panel; gallery.BorderThickness = new Thickness(0);
         gallery.Resources["SystemControlHighlightListAccentLowBrush"] = studioTheme.Selected;
         gallery.Resources["SystemControlHighlightListAccentMediumBrush"] = studioTheme.Selected;
         gallery.Resources["SystemControlHighlightListAccentHighBrush"] = studioTheme.Accent;
@@ -212,13 +226,19 @@ public sealed class MainWindow : Window
         previewViewbox = viewbox;
         var canvasContent = new Grid(); canvasContent.Children.Add(viewbox);
         var welcome = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Spacing = 14, MaxWidth = 360 };
-        var illustration = new PathIcon { Data = Geometry.Parse("M3 5 L21 5 L21 19 L3 19 Z M5 16 L10 11 L13 14 L16 10 L20 16 M8 8 L8.1 8"), Width = 72, Height = 72, Foreground = studioTheme.Accent, HorizontalAlignment = HorizontalAlignment.Center };
-        welcome.Children.Add(illustration); welcome.Children.Add(emptyCanvas);
-        var addFiles = Button("Добавить файлы", PickFilesAsync); addFiles.Background = studioTheme.Accent; addFiles.Foreground = Brushes.White; addFiles.HorizontalAlignment = HorizontalAlignment.Center; welcome.Children.Add(addFiles);
-        welcome.Children.Add(new TextBlock { Text = "Перетащите файлы в окно", Foreground = studioTheme.Secondary, HorizontalAlignment = HorizontalAlignment.Center });
+        var illustration = new Grid { Width = 180, Height = 140, HorizontalAlignment = HorizontalAlignment.Center };
+        illustration.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M18 51 L104 28 Q112 26 115 35 L130 103 Q132 112 123 114 L37 132 Q28 134 26 125 L13 62 Q11 54 18 51 Z"), Fill = new SolidColorBrush(Color.Parse("#0754A9")) });
+        illustration.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M46 23 L126 9 Q136 8 138 18 L150 94 Q151 103 141 105 L60 119 Q51 120 49 110 L37 34 Q36 25 46 23 Z"), Fill = new SolidColorBrush(Color.Parse("#299BFA")) });
+        illustration.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M56 94 L76 57 L91 73 L104 49 L131 81 Z M110 33 A7 7 0 1 0 124 33 A7 7 0 1 0 110 33"), Fill = new SolidColorBrush(Color.Parse("#92D2FF")) });
+        illustration.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M128 79 L169 92 Q176 94 173 101 L161 132 Q158 138 151 135 L112 119 Q106 116 109 109 L120 84 Q122 77 128 79 Z"), Fill = studioTheme.Accent });
+        illustration.Children.Add(new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse("M133 94 L149 109 L129 114 Z"), Fill = Brushes.White });
+        welcome.Children.Add(illustration);
+        welcome.Children.Add(new TextBlock { Text = "Создавайте стикеры для Telegram", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 23, FontWeight = FontWeight.Bold });
+        welcome.Children.Add(emptyCanvas);
+        var addFiles = Button("＋  Добавить файлы", PickFilesAsync); addFiles.Background = studioTheme.Accent; addFiles.Foreground = Brushes.White; addFiles.HorizontalAlignment = HorizontalAlignment.Center; addFiles.MinWidth = 220; addFiles.HorizontalContentAlignment = HorizontalAlignment.Center; welcome.Children.Add(addFiles);
         welcome.Children.Add(new TextBlock { Text = "PNG · JPG · GIF · MP4", Foreground = studioTheme.Secondary, HorizontalAlignment = HorizontalAlignment.Center });
         canvasContent.Children.Add(welcome); emptyCanvas.PropertyChanged += (_, e) => { if (e.Property == IsVisibleProperty) welcome.IsVisible = emptyCanvas.IsVisible; };
-        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(14), Background = studioTheme.Panel, Child = canvasContent, ClipToBounds = true };
+        var canvas = new Border { Padding = new Thickness(14), CornerRadius = new CornerRadius(14), Background = studioTheme.Panel, Child = canvasContent, ClipToBounds = true };
         DragDrop.SetAllowDrop(canvas, true);
         canvas.AddHandler(DragDrop.DragOverEvent, OnDragOver, RoutingStrategies.Bubble, true);
         canvas.AddHandler(DragDrop.DropEvent, OnDrop, RoutingStrategies.Bubble, true);
@@ -256,13 +276,13 @@ public sealed class MainWindow : Window
         Grid.SetColumn(center, 2); columns.Children.Add(center);
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
-        var properties = new StackPanel { Spacing = 8 };
+        var properties = new StackPanel { Spacing = 10 };
         editingProperties = properties;
-        properties.Children.Add(new TextBlock { Text = "ВЫБРАННЫЙ СТИКЕР", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "Редактирование", FontSize = 17, FontWeight = FontWeight.SemiBold });
         properties.Children.Add(details);
-        properties.Children.Add(new TextBlock { Text = "РЕЖИМ ПОДГОНКИ", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "Режим подгонки", FontWeight = FontWeight.SemiBold });
         properties.Children.Add(fitMode);
-        properties.Children.Add(new TextBlock { Text = "ТОЧНАЯ НАСТРОЙКА", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "Точная настройка", FontWeight = FontWeight.SemiBold });
         foreach (var (label, slider) in new[] { (scaleLabel, scale), (rotationLabel, rotation), (offsetXLabel, offsetX), (offsetYLabel, offsetY) })
         {
             var input = CreateSliderInput(slider, ReferenceEquals(slider, scale) ? 100 : 1);
@@ -281,7 +301,7 @@ public sealed class MainWindow : Window
                 properties.Children.Add(rotationActions);
             }
         }
-        properties.Children.Add(new TextBlock { Text = "ОТРАЖЕНИЕ", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 4, 0, 0) });
+        properties.Children.Add(new TextBlock { Text = "Отражение", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) });
         var flipActions = new WrapPanel(); flipActions.Children.Add(flipHorizontal); flipActions.Children.Add(flipVertical); properties.Children.Add(flipActions);
         flipHorizontal.Margin = new Thickness(0, 0, 12, 0);
         flipHorizontal.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
@@ -315,7 +335,7 @@ public sealed class MainWindow : Window
         videoTime.VerticalAlignment = VerticalAlignment.Center; videoTime.Margin = new Thickness(6, 0);
         timelineControls.Children.Add(videoTime); animationPanel.Children.Add(timelineControls);
         properties.Children.Add(groupPanel);
-        properties.Children.Add(new TextBlock { Text = "МАСШТАБ ПРОСМОТРА", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "Масштаб просмотра", FontWeight = FontWeight.SemiBold });
         properties.Children.Add(Button("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }));
         properties.Children.Add(Button("Показать 1:1", () => { ActualPreviewSize(); return Task.CompletedTask; }));
         videoSeek.PropertyChanged += (_, e) =>
@@ -339,7 +359,16 @@ public sealed class MainWindow : Window
         propertiesSplitter.KeyUp += (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(false), DispatcherPriority.Loaded);
         ApplyPanelLayout();
         SizeChanged += (_, _) => ApplyPanelLayout();
-        root.Children.Add(columns); Content = root;
+        editorPage = columns;
+        settingsPage = CreateSettingsPage(); settingsPage.IsVisible = false;
+        var pages = new Grid(); pages.Children.Add(columns); pages.Children.Add(settingsPage);
+        var navigation = new StackPanel { Width = 78, Spacing = 8, Margin = new Thickness(0, 0, 8, 0) };
+        stickersNavigation = NavButton("M4 5 L20 5 L20 19 L4 19 Z M8 15 L11 12 L14 15 L17 11 M8 9 L8.1 9", "Стикеры", () => { ShowEditor(); return Task.CompletedTask; });
+        settingsNavigation = NavButton("M12 3 L14 4 L15 6 L18 6 L20 9 L19 11 L20 14 L18 17 L15 17 L14 20 L10 20 L9 17 L6 17 L4 14 L5 12 L4 9 L6 6 L9 6 L10 3 Z M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12", "Настройки", ShowSettingsAsync);
+        stickersNavigation.Background = studioTheme.Selected;
+        navigation.Children.Add(stickersNavigation); navigation.Children.Add(settingsNavigation);
+        var shell = new DockPanel(); DockPanel.SetDock(navigation, Dock.Left); shell.Children.Add(navigation); shell.Children.Add(pages);
+        root.Children.Add(shell); Content = root;
         StudioLocalization.Capture(root); ApplyPreferences();
         ActualThemeVariantChanged += (_, _) => { if (preferences.Theme == "system") studioTheme.Apply(ActualThemeVariant == ThemeVariant.Light); };
         packName.TextChanged += (_, _) =>
@@ -366,6 +395,7 @@ public sealed class MainWindow : Window
         studioTheme.Apply(preferences.Theme == "light" || (preferences.Theme == "system" && ActualThemeVariant == ThemeVariant.Light));
         if (Content is Control root) StudioLocalization.Apply(root, preferences.Language);
         if (galleryMenu is not null) StudioLocalization.Apply(galleryMenu, preferences.Language);
+        if (projectMenu is not null) StudioLocalization.Apply(projectMenu, preferences.Language);
         foreach (var card in gallery.Items.OfType<ListBoxItem>()) StudioLocalization.Apply(card, preferences.Language);
         packName.PlaceholderText = Tr("Название набора");
         var mode = fitMode.SelectedIndex; updatingTransform = true;
@@ -382,31 +412,45 @@ public sealed class MainWindow : Window
         }
         UpdateTransformLabels(); UpdateSelection();
     }
-    private async Task ShowSettingsAsync()
+    private void ShowEditor() { if (editorPage is not null) editorPage.IsVisible = true; if (settingsPage is not null) settingsPage.IsVisible = false; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Selected; if (settingsNavigation is not null) settingsNavigation.Background = studioTheme.Surface; }
+    private Task ShowSettingsAsync() { if (editorPage is not null) editorPage.IsVisible = false; if (settingsPage is not null) settingsPage.IsVisible = true; if (stickersNavigation is not null) stickersNavigation.Background = studioTheme.Surface; if (settingsNavigation is not null) settingsNavigation.Background = studioTheme.Selected; return Task.CompletedTask; }
+    private Control CreateSettingsPage()
     {
-        var dialog = new Window { Title = Tr("Настройки"), Width = 420, Height = 380, MinWidth = 360, RequestedThemeVariant = RequestedThemeVariant, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        var panel = new StackPanel { Margin = new Thickness(24), Spacing = 12 };
-        panel.Children.Add(new TextBlock { Text = "Настройки", FontSize = 20, FontWeight = FontWeight.Bold });
-        panel.Children.Add(new TextBlock { Text = "Язык" });
+        var panel = new StackPanel { Margin = new Thickness(24), Spacing = 16, MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Stretch };
+        panel.Children.Add(new TextBlock { Text = "Настройки", FontSize = 24, FontWeight = FontWeight.Bold });
         var language = new ComboBox { ItemsSource = new[] { "Русский", "English" }, SelectedIndex = preferences.Language == "en" ? 1 : 0, HorizontalAlignment = HorizontalAlignment.Stretch };
-        panel.Children.Add(language); panel.Children.Add(new TextBlock { Text = "Оформление" });
         var appearance = new ComboBox { ItemsSource = new[] { Tr("Тёмная"), Tr("Светлая"), Tr("Как в системе") }, SelectedIndex = preferences.Theme switch { "light" => 1, "system" => 2, _ => 0 }, HorizontalAlignment = HorizontalAlignment.Stretch };
-        panel.Children.Add(appearance);
-        panel.Children.Add(Button("О программе", () => ShowAboutAsync(dialog)));
-        panel.Children.Add(Button("Закрыть", () => { dialog.Close(); return Task.CompletedTask; }));
-        StudioLocalization.Capture(panel); StudioLocalization.Apply(panel, preferences.Language); dialog.Content = panel;
+        var general = new StackPanel { Spacing = 10 };
+        general.Children.Add(new TextBlock { Text = "Язык", FontWeight = FontWeight.SemiBold }); general.Children.Add(language);
+        general.Children.Add(new TextBlock { Text = "Оформление", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 8, 0, 0) }); general.Children.Add(appearance);
+        panel.Children.Add(new Border { Background = studioTheme.Surface, BorderBrush = studioTheme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12), Padding = new Thickness(20), Child = general });
+        var about = new StackPanel { Spacing = 8 };
+        about.Children.Add(new TextBlock { Text = "StickerForge Studio", FontWeight = FontWeight.Bold, FontSize = 16 });
+        about.Children.Add(new TextBlock { Text = "Локальная подготовка изображений и видео для стикеров Telegram.", TextWrapping = TextWrapping.Wrap, Foreground = studioTheme.Secondary });
+        about.Children.Add(Button("О программе", ShowAboutAsync));
+        panel.Children.Add(new Border { Background = studioTheme.Surface, BorderBrush = studioTheme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12), Padding = new Thickness(20), Child = about });
         language.SelectionChanged += (_, _) =>
         {
             preferences = preferences with { Language = language.SelectedIndex == 1 ? "en" : "ru" }; preferencesStore.Save(preferences); ApplyPreferences();
-            StudioLocalization.Apply(panel, preferences.Language); dialog.Title = Tr("Настройки");
             var selected = appearance.SelectedIndex; appearance.ItemsSource = new[] { Tr("Тёмная"), Tr("Светлая"), Tr("Как в системе") }; appearance.SelectedIndex = selected;
         };
         appearance.SelectionChanged += (_, _) =>
         {
             if (appearance.SelectedIndex < 0) return;
-            preferences = preferences with { Theme = appearance.SelectedIndex switch { 1 => "light", 2 => "system", _ => "dark" } }; preferencesStore.Save(preferences); ApplyPreferences(); dialog.RequestedThemeVariant = RequestedThemeVariant;
+            preferences = preferences with { Theme = appearance.SelectedIndex switch { 1 => "light", 2 => "system", _ => "dark" } }; preferencesStore.Save(preferences); ApplyPreferences();
         };
-        await dialog.ShowDialog(this);
+        return new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    }
+    private static new Control Icon(string path, double size, IBrush brush) => new Avalonia.Controls.Shapes.Path { Data = Geometry.Parse(path), Width = size, Height = size, Stretch = Stretch.Uniform, Stroke = brush, StrokeThickness = 1.8, StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round };
+    private Button IconButton(string path, Func<Task> action, string tooltip)
+    {
+        var button = Button("", action, tooltip); button.Content = Icon(path, 20, studioTheme.Text); button.Background = studioTheme.Surface; return button;
+    }
+    private Button NavButton(string path, string title, Func<Task> action)
+    {
+        var button = Button("", action, title); button.Background = studioTheme.Surface; button.Margin = new Thickness(0); button.Padding = new Thickness(4, 10);
+        var content = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
+        content.Children.Add(Icon(path, 22, studioTheme.Text)); content.Children.Add(new TextBlock { Text = title, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center }); button.Content = content; return button;
     }
     private static MenuItem MenuGroup(string title, params MenuItem[] actions)
     {
@@ -496,9 +540,9 @@ public sealed class MainWindow : Window
         var columns = workspaceGrid.ColumnDefinitions;
         columns[0].MinWidth = showGallery ? 180 : 0; columns[4].MinWidth = showProperties ? 270 : 0;
         columns[1].Width = new GridLength(showGallery ? 6 : 0); columns[3].Width = new GridLength(showProperties ? 6 : 0);
-        var leftWidth = showGallery ? layout.GalleryWidth : 0;
-        var rightWidth = showProperties ? Math.Max(270, layout.PropertiesWidth) : 0;
-        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 16 - 400 - (showGallery ? 6 : 0) - (showProperties ? 6 : 0));
+        var leftWidth = showGallery ? Math.Min(layout.GalleryWidth, 300) : 0;
+        var rightWidth = showProperties ? Math.Clamp(layout.PropertiesWidth, 270, 340) : 0;
+        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 102 - 400 - (showGallery ? 6 : 0) - (showProperties ? 6 : 0));
         var excess = Math.Max(0, leftWidth + rightWidth - available);
         var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         leftWidth -= leftReduction; excess -= leftReduction;
@@ -626,6 +670,7 @@ public sealed class MainWindow : Window
         if (busy) return;
         if (project.Stickers.Count == 0) { status.Text = Tr("Добавьте файлы перед экспортом."); return; }
         busy = true; importing = new CancellationTokenSource();
+        Window? progressWindow = null;
         try
         {
             var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = preferences.Language == "en" ? $"Choose a folder for {project.Stickers.Count} stickers" : $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
@@ -633,15 +678,24 @@ public sealed class MainWindow : Window
             if (path is null) return;
             var sources = project.Stickers.ToArray();
             var name = project.Name;
-            var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = preferences.Language == "en" ? $"Exporting {p.Completed}/{p.Total}: {p.FileName}" : $"Экспорт {p.Completed}/{p.Total}: {p.FileName}"; });
+            var progressText = new TextBlock { Text = Tr("Подготовка файлов для Telegram"), Foreground = studioTheme.Secondary, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center };
+            var progressBar = new ProgressBar { Minimum = 0, Maximum = 1, Height = 10, HorizontalAlignment = HorizontalAlignment.Stretch, Foreground = studioTheme.Accent };
+            var progressContent = new StackPanel { Spacing = 18, Margin = new Thickness(28), VerticalAlignment = VerticalAlignment.Center };
+            progressContent.Children.Add(new TextBlock { Text = Tr("Экспорт стикеров…"), FontSize = 22, FontWeight = FontWeight.Bold, HorizontalAlignment = HorizontalAlignment.Center });
+            progressContent.Children.Add(progressText); progressContent.Children.Add(progressBar);
+            progressContent.Children.Add(Button(Tr("Отменить"), () => { importing?.Cancel(); return Task.CompletedTask; }));
+            progressWindow = new Window { Title = Tr("Экспорт стикеров…"), Width = 440, Height = 260, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = studioTheme.Background, Foreground = studioTheme.Text, RequestedThemeVariant = RequestedThemeVariant, Content = progressContent };
+            progressWindow.Show(this);
+            var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; progressBar.Value = progress.Value; status.Text = preferences.Language == "en" ? $"Exporting {p.Completed}/{p.Total}: {p.FileName}" : $"Экспорт {p.Completed}/{p.Total}: {p.FileName}"; progressText.Text = status.Text; });
             var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
+            progressWindow.Close(); progressWindow = null;
             status.Text = result.Exported == sources.Length ? (preferences.Language == "en" ? $"Export complete! {result.Exported} of {sources.Length} stickers prepared." : $"Экспорт завершён! Подготовлено {result.Exported} из {sources.Length} стикеров.") : Tr("Экспорт не завершён. Готовый набор не создан.");
             var lines = new List<string> { status.Text, preferences.Language == "en" ? $"Errors: {result.Errors.Count}" : $"Ошибок: {result.Errors.Count}" };
             if (result.Exported == sources.Length) lines.Add(preferences.Language == "en" ? $"Folder: {result.Directory}" : $"Папка: {result.Directory}");
             if (result.Successes.Count > 0) { lines.Add(""); lines.Add(Tr("Подготовлены:")); lines.AddRange(result.Successes); }
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add(Tr("Не удалось подготовить:")); lines.AddRange(result.Errors.Select(ExportError)); }
             if (result.Errors.Count > 0) { lines.Add(""); lines.Add(preferences.Language == "en" ? $"Diagnostic log: {ExportDiagnostics.LogPath}" : $"Журнал диагностики: {ExportDiagnostics.LogPath}"); }
-            var dialog = new Window { Title = Tr("Результат экспорта"), Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var dialog = new Window { Title = Tr("Результат экспорта"), Width = 620, Height = 420, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = studioTheme.Background, Foreground = studioTheme.Text, RequestedThemeVariant = RequestedThemeVariant };
             var reportPanel = new DockPanel();
             var openFolder = Button(Tr("Открыть папку"), () => { try { Process.Start(new ProcessStartInfo(result.Directory) { UseShellExecute = true }); } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { status.Text = preferences.Language == "en" ? "Could not open the folder." : "Не удалось открыть папку."; } return Task.CompletedTask; });
             var reportActions = new WrapPanel { Margin = new Thickness(16, 0, 16, 16) };
@@ -664,7 +718,7 @@ public sealed class MainWindow : Window
             ExportDiagnostics.Write($"export failed: {ex}");
             status.Text = preferences.Language == "en" ? "Export incomplete. Check the files and folder access; see the diagnostic log." : "Экспорт не завершён. Проверьте файлы и доступ к папке; подробности в журнале.";
         }
-        finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
+        finally { progressWindow?.Close(); importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
     {
@@ -721,8 +775,8 @@ public sealed class MainWindow : Window
                 using var stream = new MemoryStream(info.Thumbnail);
                 thumbnail = new Bitmap(stream);
             }
-            var row = new StackPanel { Width = 146, Spacing = 4 };
-            var thumbnailGrid = new Grid { Width = 140, Height = 140 };
+            var row = new StackPanel { Width = 78, Spacing = 4 };
+            var thumbnailGrid = new Grid { Width = 74, Height = 74, Background = studioTheme.Surface };
             thumbnailGrid.Children.Add(new Image { Source = thumbnail, Stretch = Stretch.Uniform });
             thumbnailGrid.Children.Add(Badge(number.ToString("000"), HorizontalAlignment.Left, VerticalAlignment.Top));
             thumbnailGrid.Children.Add(Badge(exists ? SourceFormat(info, item.SourcePath) : "НЕТ ФАЙЛА", HorizontalAlignment.Right, VerticalAlignment.Top));
@@ -732,7 +786,7 @@ public sealed class MainWindow : Window
             var frame = new Border { BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent, CornerRadius = new CornerRadius(6), Child = thumbnailGrid };
             row.Children.Add(frame);
             row.Children.Add(new TextBlock { Text = name, TextTrimming = TextTrimming.CharacterEllipsis, MaxLines = 1 });
-            var card = new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail, frame, activeBadge), Margin = new Thickness(3), Padding = new Thickness(4), Background = Brushes.Transparent };
+            var card = new ListBoxItem { Content = row, Tag = new GalleryEntry(item, thumbnail, frame, activeBadge), Margin = new Thickness(2), Padding = new Thickness(2), Background = Brushes.Transparent };
             StudioLocalization.Capture(card); StudioLocalization.Apply(card, preferences.Language);
             ToolTip.SetTip(card, name);
             gallery.Items.Add(card);

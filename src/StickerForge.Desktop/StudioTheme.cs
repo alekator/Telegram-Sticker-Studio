@@ -22,13 +22,13 @@ internal sealed class StudioTheme
     public readonly SolidColorBrush Secondary = new();
     public void Apply(bool light)
     {
-        Background.Color = Color.Parse(light ? "#F2F5F8" : "#0E1621");
-        Panel.Color = Color.Parse(light ? "#FFFFFF" : "#17212B");
-        Surface.Color = Color.Parse(light ? "#E8EFF5" : "#1F2C3A");
-        Border.Color = Color.Parse(light ? "#C8D6E3" : "#304254");
-        Accent.Color = Color.Parse("#3390EC");
+        Background.Color = Color.Parse(light ? "#F2F5F8" : "#071426");
+        Panel.Color = Color.Parse(light ? "#FFFFFF" : "#0B1B30");
+        Surface.Color = Color.Parse(light ? "#E8EFF5" : "#132B46");
+        Border.Color = Color.Parse(light ? "#C8D6E3" : "#24425F");
+        Accent.Color = Color.Parse("#078BFA");
         Success.Color = Color.Parse("#36C98A");
-        Selected.Color = Color.Parse(light ? "#D5EAFE" : "#293B4D");
+        Selected.Color = Color.Parse(light ? "#D5EAFE" : "#103C6A");
         Text.Color = Color.Parse(light ? "#17212B" : "#F5F7FA");
         Secondary.Color = Color.Parse(light ? "#536A80" : "#91A3B5");
     }
