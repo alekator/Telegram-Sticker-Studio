@@ -29,7 +29,7 @@ public sealed class VideoIntegrationTests
         }
         Close(original.GetPixel(415, 128), horizontal.GetPixel(96, 128), 55);
         Close(original.GetPixel(96, 383), vertical.GetPixel(96, 128), 55);
-        var settings = new TransformSettings { Fit = FitMode.Manual, Scale = .8, OffsetX = 20, OffsetY = -10, Rotation = 90, FlipHorizontal = true, FlipVertical = true, StartSeconds = .1, DurationSeconds = .8 };
+        var settings = new TransformSettings { Fit = FitMode.Manual, Scale = .8, OffsetX = 20, OffsetY = -10, Rotation = -73.89, FlipHorizontal = true, FlipVertical = true, StartSeconds = .1, DurationSeconds = .8 };
         var report = await new StickerPackExporter(service).ExportAsync([new StickerItem { SourcePath = path, Transform = settings }], directory, name);
         Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors)); Assert.Equal(1, report.Exported);
         foreach (var seconds in new[] { 0d, .4, .6 })
@@ -42,6 +42,75 @@ public sealed class VideoIntegrationTests
             using var result = SKBitmap.Decode(bytes.ToArray()); Assert.NotNull(result);
             foreach (var (x, y) in new[] { (256, 256), (200, 200), (300, 300), (30, 30) }) Close(preview.GetPixel(x, y), result.GetPixel(x, y), 65);
         }
+    }
+
+    private static async Task<string> RunAsync(string executable, params string[] args)
+    {
+        var start = new ProcessStartInfo(executable) { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true, CreateNoWindow = true };
+        foreach (var arg in args) start.ArgumentList.Add(arg);
+        using var process = Process.Start(start)!; var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync(); Assert.True(process.ExitCode == 0, await errors); return await output;
+    }
+
+    [FfmpegIntegrationFact]
+    public async Task ThreeSecondFragmentsKeepTheirDurationForFractionalAndVariableFrameRates()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "stickerforge-duration-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+        try
+        {
+            var cfr = Path.Combine(dir, "fractional.mp4"); var vfr = Path.Combine(dir, "variable.mp4");
+            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=23893/1000", "-t", "10", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", cfr);
+            await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=96x72:rate=30", "-t", "10", "-vf", @"select=not(mod(n\,3))+not(mod(n\,5))", "-fps_mode", "vfr", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", vfr);
+            var packetJson = await RunAsync("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "json", vfr);
+            using (var packets = System.Text.Json.JsonDocument.Parse(packetJson))
+            {
+                var times = packets.RootElement.GetProperty("packets").EnumerateArray().Select(p => double.Parse(p.GetProperty("pts_time").GetString()!, System.Globalization.CultureInfo.InvariantCulture)).Order().ToArray();
+                Assert.True(times.Zip(times.Skip(1), (a, b) => Math.Round(b - a, 3)).Distinct().Count() > 1, "Fixture must have variable frame intervals.");
+            }
+            foreach (var source in new[] { cfr, vfr })
+            {
+                var settings = new TransformSettings { Fit = FitMode.Fit, Scale = .8, OffsetX = 20, OffsetY = -10, Rotation = -73.89, FlipHorizontal = true, FlipVertical = true, StartSeconds = 5.9, DurationSeconds = 3 };
+                var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = source, Transform = settings }], dir, Path.GetFileNameWithoutExtension(source));
+                Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors)); Assert.Equal(1, report.Exported);
+                var output = Path.Combine(report.Directory, "001.webm"); var service = new FfmpegService();
+                var metadata = await service.ProbeAsync(output); var inputMetadata = await service.ProbeAsync(source);
+                Assert.Equal("vp9", metadata.Codec); Assert.Equal(512, metadata.Width); Assert.Equal(512, metadata.Height);
+                Assert.InRange(metadata.DurationSeconds, 2.96, 3); Assert.InRange(metadata.FramesPerSecond!.Value, 1, 30);
+                Assert.InRange(new FileInfo(output).Length, 1, 256 * 1024);
+                var frameJson = await RunAsync("ffprobe", "-v", "error", "-count_frames", "-show_entries", "stream=nb_read_frames,avg_frame_rate:format=duration,size", "-of", "json", output);
+                Console.WriteLine($"{Path.GetFileName(source)}: {frameJson}");
+                using (var frameProbe = System.Text.Json.JsonDocument.Parse(frameJson))
+                {
+                    var frameCount = int.Parse(frameProbe.RootElement.GetProperty("streams")[0].GetProperty("nb_read_frames").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+                    Assert.Equal((int)(metadata.FramesPerSecond.Value * 3), frameCount);
+                }
+                if (source == cfr)
+                {
+                    var shorter = new TransformSettings { StartSeconds = 5.9, DurationSeconds = 2.5 };
+                    var shorterReport = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = source, Transform = shorter }], dir, "shorter");
+                    Assert.Empty(shorterReport.Errors);
+                    var shorterInfo = await service.ProbeAsync(Path.Combine(shorterReport.Directory, "001.webm"));
+                    Assert.InRange(shorterInfo.DurationSeconds, 2.49, 2.5);
+                }
+                foreach (var time in new[] { 0d, 1d, 2.8 })
+                {
+                    using var preview = SKBitmap.Decode(await service.ReadTransformedFrameAsync(source, inputMetadata, settings.StartSeconds + time, settings));
+                    var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                    foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-i", output, "-ss", time.ToString(System.Globalization.CultureInfo.InvariantCulture), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
+                    using var decoder = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = decoder.StandardError.ReadToEndAsync();
+                    await decoder.StandardOutput.BaseStream.CopyToAsync(bytes); await decoder.WaitForExitAsync(); Assert.True(decoder.ExitCode == 0, await errors);
+                    using var frame = SKBitmap.Decode(bytes.ToArray()); Assert.NotNull(frame);
+                    Assert.Equal(0, frame.GetPixel(0, 0).Alpha); Assert.True(frame.GetPixel(256, 256).Alpha > 200);
+                    foreach (var (x, y) in new[] { (256, 256), (200, 200), (300, 300), (30, 30) })
+                    {
+                        var expected = preview.GetPixel(x, y); var actual = frame.GetPixel(x, y);
+                        Assert.InRange(Math.Abs(expected.Red - actual.Red), 0, 70); Assert.InRange(Math.Abs(expected.Green - actual.Green), 0, 70);
+                        Assert.InRange(Math.Abs(expected.Blue - actual.Blue), 0, 70); Assert.InRange(Math.Abs(expected.Alpha - actual.Alpha), 0, 70);
+                    }
+                }
+            }
+        }
+        finally { Directory.Delete(dir, true); }
     }
 
     [FfmpegIntegrationFact]

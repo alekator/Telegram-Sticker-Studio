@@ -100,7 +100,7 @@ public sealed class FfmpegService
         var scale = Math.Min(1d, 640d / Math.Max(metadata.Width, metadata.Height));
         var width = transform is null ? Math.Max(1, (int)(metadata.Width * scale)) : 512;
         var height = transform is null ? Math.Max(1, (int)(metadata.Height * scale)) : 512;
-        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
+        var fps = transform is null ? Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30) : StickerPackExporter.OutputFrameRate(metadata);
         await Processes.WaitAsync(cancellationToken);
         try
         {

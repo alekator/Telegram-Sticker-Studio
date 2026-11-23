@@ -144,14 +144,25 @@ public sealed class StickerPackExporter
             {
                 token.ThrowIfCancellationRequested();
                 ffmpeg.RunEncoderAsync(["-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", Path.GetFullPath(path), "-t", N(duration), "-filter_complex", filter, "-an", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-b:v", "0", "-crf", crf.ToString(CultureInfo.InvariantCulture), temp], token).GetAwaiter().GetResult();
-                if (new FileInfo(temp).Length > 256 * 1024) continue;
-                var probe = ffmpeg.RunProbeAsync(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration", "-of", "json", temp], token).GetAwaiter().GetResult();
+                var fileSize = new FileInfo(temp).Length;
+                ExportDiagnostics.Write($"video encoded sourceDuration={N(metadata.DurationSeconds)} requestedStart={N(transform.StartSeconds)} requestedDuration={N(transform.DurationSeconds)} start={N(start)} duration={N(duration)} sourceFps={N(metadata.FramesPerSecond ?? 30)} outputFps={N(OutputFrameRate(metadata))} crf={crf} bytes={fileSize} maxBytes={256 * 1024} maxDuration=3");
+                if (fileSize > 256 * 1024) continue;
+                var probe = ffmpeg.RunProbeAsync(["-v", "error", "-count_frames", "-show_entries", "stream=codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,nb_read_frames,start_time:format=duration,start_time,size", "-of", "json", temp], token).GetAwaiter().GetResult();
                 using var json = JsonDocument.Parse(probe);
                 var streams = json.RootElement.GetProperty("streams").EnumerateArray().ToArray();
                 var video = streams.Single(s => s.GetProperty("codec_type").GetString() == "video");
+                var actualRate = video.GetProperty("avg_frame_rate").GetString() ?? "0/0";
+                var rateParts = actualRate.Split('/');
+                var fpsValid = rateParts.Length == 2 && double.TryParse(rateParts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var numerator)
+                    && double.TryParse(rateParts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var denominator) && denominator > 0
+                    && double.IsFinite(numerator / denominator) && numerator / denominator is > 0 and <= 30;
+                var frameCount = video.GetProperty("nb_read_frames").GetString();
+                var format = json.RootElement.GetProperty("format");
+                ExportDiagnostics.Write($"video validation duration={format.GetProperty("duration").GetString()} startTime={(format.TryGetProperty("start_time", out var time) ? time.GetString() : "unknown")} frames={frameCount} fps={actualRate.Replace('/', ':')} bytes={fileSize} maxDuration=3 maxBytes={256 * 1024} maxFps=30 fpsValid={fpsValid}");
                 if (streams.Any(s => s.GetProperty("codec_type").GetString() == "audio") || video.GetProperty("codec_name").GetString() != "vp9" || video.GetProperty("width").GetInt32() != 512 || video.GetProperty("height").GetInt32() != 512) throw new InvalidDataException("Encoded video failed format validation.");
-                var seconds = double.Parse(json.RootElement.GetProperty("format").GetProperty("duration").GetString()!, CultureInfo.InvariantCulture);
-                if (seconds > 3.001 || seconds <= 0) throw new InvalidDataException("Encoded video duration is invalid.");
+                if (!fpsValid || !long.TryParse(frameCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frames) || frames <= 0) throw new InvalidDataException("Encoded video frame rate or frame count is invalid.");
+                var seconds = double.Parse(format.GetProperty("duration").GetString()!, CultureInfo.InvariantCulture);
+                if (!double.IsFinite(seconds) || seconds > 3 || seconds <= 0) throw new InvalidDataException($"Encoded video duration is invalid: {N(seconds)} seconds (maximum 3).");
                 return File.ReadAllBytes(temp);
             }
             throw new InvalidDataException("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.");
@@ -161,7 +172,7 @@ public sealed class StickerPackExporter
 
     internal static string BuildVideoFilter(VideoMetadata metadata, TransformSettings transform, double duration)
     {
-        var fps = Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30);
+        var fps = OutputFrameRate(metadata);
         var sx = 512d / metadata.Width; var sy = 512d / metadata.Height;
         if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
         var scale = Math.Clamp(transform.Scale, .1, 10);
@@ -171,6 +182,8 @@ public sealed class StickerPackExporter
         var flips = (transform.FlipHorizontal ? "hflip," : "") + (transform.FlipVertical ? "vflip," : "");
         return $"[0:v]fps={N(fps)},format=rgba,{flips}scale={width}:{height},rotate={N(transform.Rotation * Math.PI / 180)}:ow=rotw(iw):oh=roth(ih):c=none[fg];color=c=black@0.0:s=512x512:r={N(fps)}:d={N(duration)},format=rgba[bg];[bg][fg]overlay=(W-w)/2+{N(transform.OffsetX)}:(H-h)/2+{N(transform.OffsetY)}:shortest=1:format=auto,format=yuva420p";
     }
+
+    internal static double OutputFrameRate(VideoMetadata metadata) => Math.Ceiling(Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30));
 
     private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, CancellationToken token)
     {

@@ -675,6 +675,7 @@ public sealed class MainWindow : Window
             ("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.", "Не удалось уменьшить изображение до 512 КиБ. Попробуйте изображение с меньшим количеством деталей."),
             ("Encoded video failed format validation.", "Полученное видео не прошло проверку формата."),
             ("Encoded video duration is invalid.", "Длительность полученного видео недопустима."),
+            ("Encoded video duration is invalid:", "Недопустимая длительность полученного видео:"),
             ("FFmpeg and FFprobe are unavailable; configure them to import video.", "Для импорта видео нужны FFmpeg и FFprobe."),
             ("FFmpeg and FFprobe are unavailable; install or configure them to import video.", "Для импорта видео нужны FFmpeg и FFprobe."),
             ("Media process failed:", "Ошибка обработки медиа:"),
