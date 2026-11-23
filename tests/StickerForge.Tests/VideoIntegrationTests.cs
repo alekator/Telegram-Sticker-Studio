@@ -190,7 +190,7 @@ public sealed class VideoIntegrationTests
             {
                 var failed = await new StickerPackExporter(new FfmpegService(encoder, "ffprobe")).ExportAsync([gif], dir, "failed-encoder");
                 Assert.Equal(0, failed.Exported); Assert.Single(failed.Errors); Assert.Empty(failed.Successes);
-                Assert.False(File.Exists(Path.Combine(failed.Directory, "001.webm")));
+                Assert.Equal("", failed.Directory);
             }
             var gifReport = await new StickerPackExporter().ExportAsync([gif], dir, "gif-pack");
             Assert.True(gifReport.Errors.Count == 0, string.Join("; ", gifReport.Errors)); Assert.Equal(1, gifReport.Exported);

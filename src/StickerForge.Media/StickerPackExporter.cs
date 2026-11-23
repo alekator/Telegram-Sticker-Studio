@@ -33,10 +33,13 @@ public sealed class StickerPackExporter
         if (!System.IO.Directory.Exists(parentDirectory)) throw new DirectoryNotFoundException("The selected output folder does not exist.");
         token.ThrowIfCancellationRequested();
         var safeName = SafeFolderName(packName);
-        string target = Path.Combine(parentDirectory, safeName);
-        for (var suffix = 2; System.IO.Directory.Exists(target) || File.Exists(target); suffix++) target = Path.Combine(parentDirectory, $"{safeName} ({suffix})");
+        string destinationFolder = Path.Combine(parentDirectory, safeName);
+        for (var suffix = 2; System.IO.Directory.Exists(destinationFolder) || File.Exists(destinationFolder); suffix++) destinationFolder = Path.Combine(parentDirectory, $"{safeName} ({suffix})");
+        var target = Path.Combine(parentDirectory, ".stickerforge-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(target);
         var errors = new List<string>(); var successes = new List<string>(); var exported = 0; var cancelled = false;
+        try
+        {
         for (var i = 0; i < sources.Count; i++)
         {
             var item = sources[i]; var source = item.SourcePath;
@@ -47,6 +50,9 @@ public sealed class StickerPackExporter
                 if (new FileInfo(source).Length > 100 * 1024 * 1024) throw new InvalidDataException("File exceeds 100 MB.");
                 var tiff = ImageImporter.IsTiff(source);
                 var animated = !tiff && IsAnimated(source);
+                var extension = Path.GetExtension(source).ToLowerInvariant();
+                if (extension is not (".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".tif" or ".tiff" or ".gif" or ".apng" or ".mp4" or ".mov" or ".mkv" or ".webm" or ".avi")) extension = "other";
+                ExportDiagnostics.Write($"item {i + 1} sourceType={extension} output={(animated ? "webm" : "webp")}");
                 var bytes = animated ? ConvertAnimation(source, item.Transform, target, token) : tiff
                     ? ConvertImage(ffmpeg.ReadFrameAsync(source, 0, token).GetAwaiter().GetResult(), item.Transform, token)
                     : ConvertImage(File.ReadAllBytes(source), item.Transform, token);
@@ -66,6 +72,9 @@ public sealed class StickerPackExporter
                     token.ThrowIfCancellationRequested();
                     if (bytes.Length == 0 || !System.Security.Cryptography.SHA256.HashData(bytes).SequenceEqual(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(temporary))))
                         throw new InvalidDataException("Output verification failed.");
+                    var validator = new TelegramStickerValidator(ffmpeg);
+                    if (animated) validator.ValidateVideoAsync(temporary, requireAlpha: true, token).GetAwaiter().GetResult();
+                    else validator.ValidateStatic(temporary);
                     File.Move(temporary, destination, false); exported++;
                     successes.Add($"{Path.GetFileName(source)} → {Path.GetFileName(destination)}");
                     ExportDiagnostics.Write($"item {i + 1} complete output={ExportDiagnostics.PathId(destination)} bytes={bytes.Length}");
@@ -77,8 +86,17 @@ public sealed class StickerPackExporter
             { ExportDiagnostics.Write($"item {i + 1} failed: {ex.ToString().Replace(source, ExportDiagnostics.PathId(source), StringComparison.OrdinalIgnoreCase).Replace(target, ExportDiagnostics.PathId(target), StringComparison.OrdinalIgnoreCase)}"); errors.Add($"{Path.GetFileName(source)}: {ex.Message}"); }
             progress?.Report(new ExportProgress(i + 1, sources.Count, Path.GetFileName(source)));
         }
-        ExportDiagnostics.Write($"export complete success={exported} errors={errors.Count} cancelled={cancelled}");
-        return new ExportReport(target, exported, errors, cancelled, successes);
+        token.ThrowIfCancellationRequested();
+        if (errors.Count == 0 && !cancelled && exported == sources.Count)
+        {
+            System.IO.Directory.Move(target, destinationFolder);
+            ExportDiagnostics.Write($"export complete success={exported} errors=0 cancelled=false");
+            return new ExportReport(destinationFolder, exported, errors, false, successes);
+        }
+        ExportDiagnostics.Write($"export incomplete validated={exported} errors={errors.Count} cancelled={cancelled}");
+        return new ExportReport("", 0, errors, cancelled, []);
+        }
+        finally { if (System.IO.Directory.Exists(target)) System.IO.Directory.Delete(target, true); }
     }
 
     private byte[] ConvertAnimation(string path, TransformSettings transform, string directory, CancellationToken token)
@@ -140,6 +158,7 @@ public sealed class StickerPackExporter
         var temp = Path.Combine(directory, $".{Guid.NewGuid():N}.webm");
         try
         {
+            string? lastFailure = null;
             foreach (var crf in new[] { 20, 28, 36, 44, 52, 60, 63 })
             {
                 token.ThrowIfCancellationRequested();
@@ -163,8 +182,19 @@ public sealed class StickerPackExporter
                 if (!fpsValid || !long.TryParse(frameCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out var frames) || frames <= 0) throw new InvalidDataException("Encoded video frame rate or frame count is invalid.");
                 var seconds = double.Parse(format.GetProperty("duration").GetString()!, CultureInfo.InvariantCulture);
                 if (!double.IsFinite(seconds) || seconds > 3 || seconds <= 0) throw new InvalidDataException($"Encoded video duration is invalid: {N(seconds)} seconds (maximum 3).");
+                try
+                {
+                    var validator = new TelegramStickerValidator(ffmpeg);
+                    validator.ValidateVideoAsync(temp, true, token).GetAwaiter().GetResult();
+                    validator.ValidateAlphaAsync(Path.GetFullPath(path), temp, start, duration, filter, token).GetAwaiter().GetResult();
+                }
+                catch (InvalidDataException ex)
+                {
+                    lastFailure = ex.Message; ExportDiagnostics.Write($"video validation retry crf={crf} reason={ex.Message}"); continue;
+                }
                 return File.ReadAllBytes(temp);
             }
+            if (lastFailure is not null) throw new InvalidDataException($"Не удалось подготовить корректное видео после 7 попыток: {lastFailure}");
             throw new InvalidDataException("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.");
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
@@ -199,11 +229,22 @@ public sealed class StickerPackExporter
         token.ThrowIfCancellationRequested();
         using var image = SKImage.FromBitmap(bitmap);
         using var result = Render(image, transform);
+        using var expected = SKBitmap.FromImage(result);
         foreach (var quality in new[] { 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0 })
         {
             token.ThrowIfCancellationRequested();
             using var encoded = result.Encode(SKEncodedImageFormat.Webp, quality) ?? throw new InvalidDataException("WebP encoding is unavailable.");
-            if (encoded.Size <= MaxFileBytes) return encoded.ToArray();
+            ExportDiagnostics.Write($"static encoding quality={quality} bytes={encoded.Size} maxBytes={MaxFileBytes}");
+            if (encoded.Size <= MaxFileBytes)
+            {
+                var bytesOut = encoded.ToArray(); using var actual = SKBitmap.Decode(bytesOut);
+                if (actual is null || actual.Width != Size || actual.Height != Size) continue;
+                var alphaMatches = true;
+                for (var y = 0; y < Size && alphaMatches; y++) for (var x = 0; x < Size; x++)
+                    if (Math.Abs(expected.GetPixel(x, y).Alpha - actual.GetPixel(x, y).Alpha) > 2) { alphaMatches = false; break; }
+                if (!alphaMatches) { ExportDiagnostics.Write($"static validation retry quality={quality} reason=alpha"); continue; }
+                ExportDiagnostics.Write($"validation static alpha=matched quality={quality}"); return bytesOut;
+            }
         }
         throw new InvalidDataException("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.");
     }

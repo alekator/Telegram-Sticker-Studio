@@ -6,6 +6,7 @@ namespace StickerForge.Tests;
 
 public sealed class StickerPackExporterTests : IDisposable
 {
+    private sealed class CallbackProgress(Action<ExportProgress> action) : IProgress<ExportProgress> { public void Report(ExportProgress value) => action(value); }
     [Theory]
     [InlineData(false, false, 255, 0)]
     [InlineData(true, false, 0, 255)]
@@ -91,8 +92,8 @@ public sealed class StickerPackExporterTests : IDisposable
     {
         var source = Image("one.png", SKEncodedImageFormat.Png); var missing = Path.Combine(directory, "missing.png");
         var report = await new StickerPackExporter().ExportAsync([missing, source], directory, "..\\pack");
-        Assert.Single(report.Errors); Assert.Equal(1, report.Exported); Assert.True(File.Exists(Path.Combine(report.Directory, "002.webp")));
-        Assert.Equal(Path.GetFullPath(directory), Path.GetDirectoryName(report.Directory));
+        Assert.Single(report.Errors); Assert.Equal(0, report.Exported); Assert.Equal("", report.Directory);
+        Assert.Empty(Directory.GetDirectories(directory));
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new StickerPackExporter().ExportAsync([source], directory, "cancelled", cancellationToken: cancelled.Token));
         Assert.False(Directory.Exists(Path.Combine(directory, "cancelled")));
@@ -104,10 +105,8 @@ public sealed class StickerPackExporterTests : IDisposable
         var bad = Path.Combine(directory, "corrupt.png"); await File.WriteAllTextAsync(bad, "not an image");
         var good = Image("good.png", SKEncodedImageFormat.Png);
         var report = await new StickerPackExporter().ExportAsync([bad, good], directory, "partial");
-        Assert.Single(report.Errors); Assert.Equal(1, report.Exported);
-        Assert.False(File.Exists(Path.Combine(report.Directory, "001.webp")));
-        Assert.True(File.Exists(Path.Combine(report.Directory, "002.webp")));
-        Assert.Single(report.Successes);
+        Assert.Single(report.Errors); Assert.Equal(0, report.Exported);
+        Assert.Equal("", report.Directory); Assert.Empty(report.Successes); Assert.Empty(Directory.GetDirectories(directory));
         var retry = await new StickerPackExporter().ExportAsync([good], directory, "partial");
         Assert.Empty(retry.Errors); Assert.Equal(1, retry.Exported);
     }
@@ -117,6 +116,24 @@ public sealed class StickerPackExporterTests : IDisposable
     {
         var source = Image("folder.png", SKEncodedImageFormat.Png);
         await Assert.ThrowsAsync<DirectoryNotFoundException>(() => new StickerPackExporter().ExportAsync([source], Path.Combine(directory, "absent"), "pack"));
+    }
+
+    [Fact]
+    public async Task AtomicBatchPreservesPreviousExportOnErrorAndCancellation()
+    {
+        var good = Image("first.png", SKEncodedImageFormat.Png); var other = Image("last.jpg", SKEncodedImageFormat.Jpeg);
+        var exporter = new StickerPackExporter();
+        var previous = await exporter.ExportAsync([good], directory, "saved");
+        Assert.Equal(1, previous.Exported); var previousFile = Path.Combine(previous.Directory, "001.webp"); var bytes = await File.ReadAllBytesAsync(previousFile);
+        var missing = Path.Combine(directory, "missing.png");
+        var failed = await exporter.ExportAsync([good, missing, other], directory, "saved");
+        Assert.Equal(0, failed.Exported); Assert.Single(failed.Errors); Assert.Equal("", failed.Directory);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(previousFile)); Assert.Single(Directory.GetDirectories(directory));
+        using var cancel = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => exporter.ExportAsync([good, other], directory, "cancel", new CallbackProgress(_ => cancel.Cancel()), cancel.Token));
+        Assert.Single(Directory.GetDirectories(directory)); Assert.Equal(bytes, await File.ReadAllBytesAsync(previousFile));
+        var retry = await exporter.ExportAsync([good, other], directory, "saved");
+        Assert.Equal(2, retry.Exported); Assert.Empty(retry.Errors); Assert.Equal(bytes, await File.ReadAllBytesAsync(previousFile));
     }
 
     [Fact]
