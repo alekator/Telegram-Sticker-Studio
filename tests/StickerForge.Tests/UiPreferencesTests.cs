@@ -14,6 +14,74 @@ namespace StickerForge.Tests;
 public sealed class UiPreferencesTests
 {
     [Fact]
+    public async Task PanelButtonsRemainUsableAcrossStatesAndWindowSizes()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-panel-buttons-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(() =>
+            {
+                foreach (var language in new[] { "ru", "en" })
+                foreach (var extension in new[] { ".png", ".gif", ".mp4" })
+                {
+                    var preferences = new UiPreferencesStore(Path.Combine(directory, "ui.json")); preferences.Save(new UiPreferences(language, "dark"));
+                    var panelStore = new PanelLayoutStore(Path.Combine(directory, "panels.json")); panelStore.Save(new PanelLayout());
+                    var window = new MainWindow(panelStore, preferences) { Width = 1280, Height = 720 };
+                    try
+                    {
+                        var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        project.Stickers.Add(new StickerForge.Core.StickerItem { SourcePath = Path.Combine(directory, "fixture" + extension) });
+                        typeof(MainWindow).GetMethod("RefreshGallery", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+                        window.Show(); window.UpdateLayout();
+                        var galleryPanel = (Control)typeof(MainWindow).GetField("galleryPanel", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        var properties = (Control)typeof(MainWindow).GetField("propertiesSide", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        var workspace = (Grid)typeof(MainWindow).GetField("workspaceGrid", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        var canvas = (Control)typeof(MainWindow).GetField("previewCanvas", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                        var left = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "GalleryVisibility");
+                        var right = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "PropertiesVisibility");
+                        void Check(bool galleryVisible, bool propertiesVisible)
+                        {
+                            window.UpdateLayout();
+                            Assert.Equal(galleryVisible, galleryPanel.IsVisible); Assert.Equal(propertiesVisible, properties.IsVisible);
+                            Assert.True(left.IsEffectivelyVisible); Assert.True(right.IsEffectivelyVisible);
+                            Assert.Equal(32, left.Bounds.Width); Assert.Equal(40, left.Bounds.Height);
+                            Assert.Equal(language == "en" ? (galleryVisible ? "Hide gallery" : "Show gallery") : (galleryVisible ? "Свернуть галерею" : "Показать галерею"), ToolTip.GetTip(left));
+                            Assert.Equal(language == "en" ? (propertiesVisible ? "Hide properties" : "Show properties") : (propertiesVisible ? "Свернуть свойства" : "Показать свойства"), ToolTip.GetTip(right));
+                            foreach (var button in new[] { left, right })
+                            {
+                                var point = button.TranslatePoint(new Point(0, 0), window)!.Value;
+                                Assert.InRange(point.X, 0, window.ClientSize.Width - button.Bounds.Width);
+                            }
+                            var canvasStart = canvas.TranslatePoint(new Point(0, 0), window)!.Value.X;
+                            Assert.True(left.TranslatePoint(new Point(0, 0), window)!.Value.X + left.Bounds.Width <= canvasStart);
+                            Assert.True(right.TranslatePoint(new Point(0, 0), window)!.Value.X >= canvasStart + canvas.Bounds.Width);
+                        }
+                        void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        Check(true, true);
+                        var initialCanvasWidth = workspace.ColumnDefinitions[2].ActualWidth;
+                        Click(left); Check(false, true);
+                        Click(left); Click(right); Check(true, false);
+                        Click(left); Check(false, false);
+                        Assert.True(workspace.ColumnDefinitions[2].ActualWidth > initialCanvasWidth);
+                        Click(left); Click(right); Check(true, true);
+                        window.Width = 700; Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Check(false, true);
+                        Click(left); Check(true, false);
+                        Click(left); Check(false, false);
+                        Click(right); Check(false, true);
+                        window.Width = 1280; Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Check(false, true);
+                        Click(left); Check(true, true);
+                        var more = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "MoreActions");
+                        var menu = Assert.IsType<ContextMenu>(more.ContextMenu);
+                        Assert.DoesNotContain(menu.Items.OfType<MenuItem>(), x => ((string?)x.Header ?? "").Contains("gallery", StringComparison.OrdinalIgnoreCase) || ((string?)x.Header ?? "").Contains("галере", StringComparison.OrdinalIgnoreCase) || ((string?)x.Header ?? "").Contains("properties", StringComparison.OrdinalIgnoreCase) || ((string?)x.Header ?? "").Contains("свойств", StringComparison.OrdinalIgnoreCase));
+                    }
+                    finally { window.Close(); }
+                }
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+    [Fact]
     public async Task ToolbarAndSettingsTogglePreserveProjectInBothLanguagesAndCompactWindows()
     {
         var directory = Path.Combine(Path.GetTempPath(), "sf-toolbar-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);

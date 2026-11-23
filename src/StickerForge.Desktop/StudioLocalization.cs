@@ -42,6 +42,7 @@ internal static class StudioLocalization
         , ["Редактирование"] = "Editing", ["Режим подгонки"] = "Placement", ["Точная настройка"] = "Adjustments", ["Отражение"] = "Flip", ["Масштаб просмотра"] = "View zoom", ["＋  Добавить файлы"] = "＋  Add files", ["Команды проекта"] = "Project commands", ["Создавайте стикеры для Telegram"] = "Create stickers for Telegram"
         , ["Подготовка файлов для Telegram"] = "Preparing files for Telegram", ["Экспорт стикеров…"] = "Exporting stickers…"
         , ["Добавить"] = "Add", ["Открыть"] = "Open", ["Другие действия"] = "More actions"
+        , ["Свернуть галерею"] = "Hide gallery", ["Показать галерею"] = "Show gallery", ["Свернуть свойства"] = "Hide properties", ["Показать свойства"] = "Show properties"
         , ["Экспорт завершён!"] = "Export complete!", ["Продолжить работу"] = "Back to editing", ["НЕТ ФАЙЛА"] = "FILE MISSING", ["ТЕКУЩИЙ"] = "CURRENT", ["Лицензии"] = "Licenses"
     };
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, LocalizedKey> TooltipKeys = new();

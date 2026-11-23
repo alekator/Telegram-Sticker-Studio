@@ -104,6 +104,8 @@ public sealed class MainWindow : Window
     private Control? propertiesSide;
     private GridSplitter? gallerySplitter;
     private GridSplitter? propertiesSplitter;
+    private Button? galleryVisibilityButton;
+    private Button? propertiesVisibilityButton;
     private Viewbox? previewViewbox;
     private Border? previewCanvas;
     private readonly TextBlock emptyCanvas = new() { Text = "Перетащите файлы сюда или нажмите «Добавить файлы»", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 340, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -134,8 +136,6 @@ public sealed class MainWindow : Window
         projectMenu.Items.Add(MenuAction("Новый проект", NewAsync));
         projectMenu.Items.Add(MenuAction("Сохранить как…", async () => { await SaveAsync(true); }));
         projectMenu.Items.Add(MenuAction("Добавить папку…", PickFolderAsync));
-        projectMenu.Items.Add(MenuAction("Показать или скрыть галерею", () => { ToggleGallery(); return Task.CompletedTask; }));
-        projectMenu.Items.Add(MenuAction("Показать или скрыть свойства", () => { ToggleProperties(); return Task.CompletedTask; }));
         projectMenu.Items.Add(MenuAction("О программе", ShowAboutAsync));
         StudioLocalization.Capture(projectMenu);
         var top = new DockPanel { LastChildFill = false };
@@ -171,7 +171,7 @@ public sealed class MainWindow : Window
         var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("320,6,*,6,280") };
         workspaceGrid = columns;
         columns.ColumnDefinitions[0].MinWidth = 180; columns.ColumnDefinitions[0].MaxWidth = 600;
-        columns.ColumnDefinitions[2].MinWidth = 400;
+        columns.ColumnDefinitions[2].MinWidth = 320;
         columns.ColumnDefinitions[4].MinWidth = 270; columns.ColumnDefinitions[4].MaxWidth = 500;
         var left = new DockPanel { Margin = new Thickness(4, 0, 4, 0) };
         var actions = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = true };
@@ -217,7 +217,7 @@ public sealed class MainWindow : Window
         left.Children.Add(dropZone);
         galleryPanel = left;
         Grid.SetColumn(left, 0); columns.Children.Add(left);
-        gallerySplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
+        gallerySplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(gallerySplitter, "Изменить ширину галереи"); Grid.SetColumn(gallerySplitter, 1); columns.Children.Add(gallerySplitter);
         var layers = new Grid { Width = 512, Height = 512, ClipToBounds = true };
         layers.Children.Add(new Checkerboard());
@@ -277,7 +277,7 @@ public sealed class MainWindow : Window
         animationBar.Child = new ScrollViewer { Content = animationPanel, MaxHeight = 165, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         DockPanel.SetDock(animationBar, Dock.Bottom); center.Children.Add(animationBar); center.Children.Add(canvas);
         Grid.SetColumn(center, 2); columns.Children.Add(center);
-        propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Stretch, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
+        propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
         var properties = new StackPanel { Spacing = 10 };
         editingProperties = properties;
@@ -356,6 +356,10 @@ public sealed class MainWindow : Window
         var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = new ScrollViewer { Content = propertyContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
         propertiesSide = propertiesPanel;
         Grid.SetColumn(propertiesPanel, 4); columns.Children.Add(propertiesPanel);
+        galleryVisibilityButton = PanelVisibilityButton("GalleryVisibility", ToggleGallery);
+        propertiesVisibilityButton = PanelVisibilityButton("PropertiesVisibility", ToggleProperties);
+        Grid.SetColumn(galleryVisibilityButton, 1); columns.Children.Add(galleryVisibilityButton);
+        Grid.SetColumn(propertiesVisibilityButton, 3); columns.Children.Add(propertiesVisibilityButton);
         gallerySplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(true), DispatcherPriority.Loaded));
         propertiesSplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(false), DispatcherPriority.Loaded));
         gallerySplitter.KeyUp += (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(true), DispatcherPriority.Loaded);
@@ -393,6 +397,7 @@ public sealed class MainWindow : Window
         if (Content is Control root) StudioLocalization.Apply(root, preferences.Language);
         if (galleryMenu is not null) StudioLocalization.Apply(galleryMenu, preferences.Language);
         if (projectMenu is not null) StudioLocalization.Apply(projectMenu, preferences.Language);
+        UpdatePanelButtons();
         foreach (var card in gallery.Items.OfType<ListBoxItem>()) StudioLocalization.Apply(card, preferences.Language);
         packName.PlaceholderText = Tr("Название набора");
         var mode = fitMode.SelectedIndex; updatingTransform = true;
@@ -459,6 +464,27 @@ public sealed class MainWindow : Window
         button.Content = content;
         return button;
     }
+    private Button PanelVisibilityButton(string name, Action action)
+    {
+        var button = new Button { Name = name, Width = 32, Height = 40, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), Margin = new Thickness(0), Background = studioTheme.Surface, CornerRadius = new CornerRadius(9), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        button.Click += (_, _) => action();
+        return button;
+    }
+    private void UpdatePanelButtons()
+    {
+        if (galleryVisibilityButton is null || propertiesVisibilityButton is null || galleryPanel is null || propertiesSide is null) return;
+        void Update(Button button, bool visible, bool left)
+        {
+            var pointsLeft = left == visible;
+            button.Content = Icon(pointsLeft ? "M15 5 L8 12 L15 19" : "M9 5 L16 12 L9 19", 14, studioTheme.Text);
+            var label = left ? (visible ? "Свернуть галерею" : "Показать галерею") : (visible ? "Свернуть свойства" : "Показать свойства");
+            var localized = Tr(label);
+            ToolTip.SetTip(button, localized);
+            Avalonia.Automation.AutomationProperties.SetName(button, localized);
+        }
+        Update(galleryVisibilityButton, galleryPanel.IsVisible, true);
+        Update(propertiesVisibilityButton, propertiesSide.IsVisible, false);
+    }
     private async Task ResetSelectedAsync()
     {
         if (busy || SelectedEntry() is null) return;
@@ -518,9 +544,9 @@ public sealed class MainWindow : Window
     }
     private void ToggleGallery()
     {
-        if (layout.GalleryVisible && galleryPanel is { IsVisible: false })
-            layout = layout with { PropertiesVisible = false };
-        else layout = layout with { GalleryVisible = !layout.GalleryVisible };
+        if (galleryPanel is { IsVisible: false })
+            layout = layout with { GalleryVisible = true, PropertiesVisible = ClientSize.Width < 930 ? false : layout.PropertiesVisible };
+        else layout = layout with { GalleryVisible = false };
         ApplyPanelLayout();
     }
     private void ToggleProperties() { layout = layout with { PropertiesVisible = !layout.PropertiesVisible }; ApplyPanelLayout(); }
@@ -535,15 +561,19 @@ public sealed class MainWindow : Window
         if (workspaceGrid is null || galleryPanel is null || propertiesSide is null || gallerySplitter is null || propertiesSplitter is null) return;
         var hasItems = project.Stickers.Count > 0;
         var showProperties = hasItems && layout.PropertiesVisible;
-        var showGallery = hasItems && layout.GalleryVisible && (!showProperties || ClientSize.Width >= 898);
+        var showGallery = hasItems && layout.GalleryVisible && (!showProperties || ClientSize.Width >= 930);
         galleryPanel.IsVisible = gallerySplitter.IsVisible = showGallery;
         propertiesSide.IsVisible = propertiesSplitter.IsVisible = showProperties;
+        if (galleryVisibilityButton is not null) galleryVisibilityButton.IsVisible = hasItems;
+        if (propertiesVisibilityButton is not null) propertiesVisibilityButton.IsVisible = hasItems;
         var columns = workspaceGrid.ColumnDefinitions;
         columns[0].MinWidth = showGallery ? 180 : 0; columns[4].MinWidth = showProperties ? 270 : 0;
-        columns[1].Width = new GridLength(showGallery ? 6 : 0); columns[3].Width = new GridLength(showProperties ? 6 : 0);
+        columns[1].Width = new GridLength(hasItems ? 32 : 0); columns[3].Width = new GridLength(hasItems ? 32 : 0);
         var leftWidth = showGallery ? Math.Min(layout.GalleryWidth, 300) : 0;
         var rightWidth = showProperties ? Math.Clamp(layout.PropertiesWidth, 270, 340) : 0;
-        var available = Math.Max(0, (ClientSize.Width > 0 ? ClientSize.Width : Width) - 16 - 400 - (showGallery ? 6 : 0) - (showProperties ? 6 : 0));
+        var clientWidth = ClientSize.Width > 0 ? ClientSize.Width : Width;
+        var centralMinimum = Math.Clamp(clientWidth - 16 - (hasItems ? 64 : 0) - (showProperties ? 270 : 0), 320, 400);
+        var available = Math.Max(0, clientWidth - 16 - centralMinimum - (hasItems ? 64 : 0));
         var excess = Math.Max(0, leftWidth + rightWidth - available);
         var leftReduction = Math.Min(excess / 2, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         leftWidth -= leftReduction; excess -= leftReduction;
@@ -552,6 +582,7 @@ public sealed class MainWindow : Window
         leftWidth -= Math.Min(excess, Math.Max(0, leftWidth - (showGallery ? 180 : 0)));
         columns[0].Width = new GridLength(leftWidth); columns[4].Width = new GridLength(rightWidth);
         columns[2].Width = new GridLength(1, GridUnitType.Star);
+        UpdatePanelButtons();
     }
 
     private static Button Button(string text, Func<Task> action, string? tooltip = null)
