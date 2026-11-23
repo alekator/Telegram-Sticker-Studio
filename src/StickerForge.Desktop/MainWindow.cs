@@ -60,7 +60,8 @@ public sealed class MainWindow : Window
         Title = "StickerForge Studio";
         Width = 1280; Height = 760; MinWidth = 820; MinHeight = 520;
         RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
-        var root = new DockPanel { Margin = new Thickness(14) };
+        Background = new SolidColorBrush(Color.Parse("#111621"));
+        var root = new DockPanel { Margin = new Thickness(16) };
         var top = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
         top.Children.Add(Button("New", async () => await NewAsync(), "Ctrl+N"));
         top.Children.Add(Button("Open", async () => await OpenAsync(), "Ctrl+O"));
@@ -69,13 +70,18 @@ public sealed class MainWindow : Window
         top.Children.Add(packName);
         top.Children.Add(Button("Import files", async () => await PickFilesAsync(), "Ctrl+I"));
         top.Children.Add(Button("Import folder", async () => await PickFolderAsync()));
-        top.Children.Add(Button("Cancel import", () => { importing?.Cancel(); return Task.CompletedTask; }));
+        var exportButton = Button("Export stickers", ExportAsync);
+        exportButton.Background = new SolidColorBrush(Color.Parse("#7658DF")); exportButton.Foreground = Brushes.White;
+        top.Children.Add(exportButton);
+        top.Children.Add(Button("Cancel operation", () => { importing?.Cancel(); return Task.CompletedTask; }));
         DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
         var bottom = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(0, 12, 0, 0) };
         bottom.Children.Add(status); bottom.Children.Add(progress);
         DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
         var columns = new Grid { ColumnDefinitions = new ColumnDefinitions("2*,4*,2*"), ColumnSpacing = 12 };
         var left = new DockPanel();
+        var galleryTitle = new TextBlock { Text = "YOUR STICKERS", FontWeight = FontWeight.Bold, Margin = new Thickness(4, 2, 4, 12) };
+        DockPanel.SetDock(galleryTitle, Dock.Top); left.Children.Add(galleryTitle);
         var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
         actions.Children.Add(Button("Remove", RemoveSelected));
         actions.Children.Add(Button("↑", () => MoveSelected(-1)));
@@ -94,7 +100,7 @@ public sealed class MainWindow : Window
         later.Click += async (_, _) => await MoveSelected(1);
         menu.Items.Add(remove); menu.Items.Add(earlier); menu.Items.Add(later);
         gallery.ContextMenu = menu;
-        dropZone.Child = gallery;
+        dropZone.Child = gallery; dropZone.Background = new SolidColorBrush(Color.Parse("#192130")); dropZone.CornerRadius = new CornerRadius(10); dropZone.Padding = new Thickness(6);
         DragDrop.SetAllowDrop(dropZone, true);
         dropZone.AddHandler(DragDrop.DragOverEvent, OnDragOver);
         dropZone.AddHandler(DragDrop.DragLeaveEvent, (_, _) => dropZone.BorderBrush = Brushes.Transparent);
@@ -104,12 +110,15 @@ public sealed class MainWindow : Window
         var layers = new Grid();
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
-        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(8), Child = layers, ClipToBounds = true };
+        var canvas = new Border { Padding = new Thickness(20), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Color.Parse("#192130")), Child = layers, ClipToBounds = true };
         canvas.PointerWheelChanged += (_, e) => { previewZoom = Math.Clamp(previewZoom * (e.Delta.Y > 0 ? 1.1 : 1 / 1.1), 0.25, 8); preview.RenderTransform = new ScaleTransform(previewZoom, previewZoom); e.Handled = true; };
         Grid.SetColumn(canvas, 1); columns.Children.Add(canvas);
         var properties = new StackPanel { Spacing = 12 };
-        properties.Children.Add(new TextBlock { Text = "PROPERTIES", FontWeight = FontWeight.Bold });
+        properties.Children.Add(new TextBlock { Text = "STICKER DETAILS", FontWeight = FontWeight.Bold });
         properties.Children.Add(details);
+        properties.Children.Add(new TextBlock { Text = "EXPORT TO TELEGRAM", FontWeight = FontWeight.Bold, Margin = new Thickness(0, 16, 0, 0) });
+        properties.Children.Add(new TextBlock { Text = "1. Import and arrange your images.\n2. Choose Export stickers and select a folder.\n3. Open Telegram's @Stickers mini app and create a static sticker set. Upload the numbered WebP files and assign an emoji to each.", TextWrapping = TextWrapping.Wrap });
+        properties.Children.Add(new TextBlock { Text = "Your original files stay unchanged. Export runs locally.", TextWrapping = TextWrapping.Wrap, Opacity = .75 });
         properties.Children.Add(Button("Fit to window", () => { previewZoom = 1; preview.RenderTransform = null; return Task.CompletedTask; }));
         gifPlay.Click += (_, _) => ToggleGif();
         properties.Children.Add(gifPlay);
@@ -128,7 +137,8 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        Grid.SetColumn(properties, 2); columns.Children.Add(properties);
+        var propertiesPanel = new Border { Background = new SolidColorBrush(Color.Parse("#192130")), CornerRadius = new CornerRadius(10), Padding = new Thickness(16), Child = new ScrollViewer { Content = properties } };
+        Grid.SetColumn(propertiesPanel, 2); columns.Children.Add(propertiesPanel);
         root.Children.Add(columns); Content = root;
         packName.TextChanged += (_, _) =>
         {
@@ -167,7 +177,7 @@ public sealed class MainWindow : Window
     {
         if (!dirty && !busy) return;
         e.Cancel = true;
-        if (busy) { status.Text = "Cancel the import before closing."; return; }
+        if (busy) { status.Text = "Cancel the current operation before closing."; return; }
         if (await ConfirmDiscardAsync()) { dirty = false; Close(); }
     }
     private async Task NewAsync()
@@ -252,6 +262,32 @@ public sealed class MainWindow : Window
             dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, scan.Errors), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
             await dialog.ShowDialog(this);
         }
+    }
+    private async Task ExportAsync()
+    {
+        if (busy) return;
+        if (project.Stickers.Count == 0) { status.Text = "Add images before exporting."; return; }
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Choose export destination", AllowMultiple = false });
+        var path = folders.FirstOrDefault()?.TryGetLocalPath();
+        if (path is null || busy) return;
+        var sources = project.Stickers.Select(s => s.SourcePath).ToArray();
+        var name = project.Name;
+        busy = true; importing = new CancellationTokenSource();
+        try
+        {
+            var reportProgress = new Progress<ExportProgress>(p => { progress.Value = (double)p.Completed / p.Total; status.Text = $"Exporting {p.Completed}/{p.Total}: {p.FileName}"; });
+            var result = await new StickerPackExporter().ExportAsync(sources, path, name, reportProgress, importing.Token);
+            status.Text = result.Cancelled ? $"Export cancelled: {result.Exported} saved." : $"Exported {result.Exported} of {sources.Length} stickers.";
+            var lines = new List<string> { status.Text, $"Folder: {result.Directory}" };
+            if (result.Errors.Count > 0) { lines.Add(""); lines.Add("Some files could not be exported:"); lines.AddRange(result.Errors); }
+            var dialog = new Window { Title = "Export report", Width = 620, Height = 380, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            dialog.Content = new ScrollViewer { Content = new TextBlock { Text = string.Join(Environment.NewLine, lines), Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap } };
+            await dialog.ShowDialog(this);
+        }
+        catch (OperationCanceledException) { status.Text = "Export cancelled."; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        { status.Text = $"Export failed: {ex.Message}"; }
+        finally { importing.Dispose(); importing = null; busy = false; progress.Value = 0; }
     }
     private async Task ImportAsync(IEnumerable<string> paths)
     {

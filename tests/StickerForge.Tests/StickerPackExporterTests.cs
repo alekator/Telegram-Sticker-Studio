@@ -1,0 +1,79 @@
+using SkiaSharp;
+using StickerForge.Media;
+
+namespace StickerForge.Tests;
+
+public sealed class StickerPackExporterTests : IDisposable
+{
+    private readonly string directory = Path.Combine(Path.GetTempPath(), "stickerforge-export-" + Guid.NewGuid().ToString("N"));
+    public StickerPackExporterTests() => Directory.CreateDirectory(directory);
+    public void Dispose() => Directory.Delete(directory, true);
+
+    private string Image(string name, SKEncodedImageFormat format)
+    {
+        using var bitmap = new SKBitmap(40, 20); bitmap.Erase(SKColors.Red);
+        using var image = SKImage.FromBitmap(bitmap); using var encoded = image.Encode(format, 100);
+        var path = Path.Combine(directory, name); File.WriteAllBytes(path, encoded.ToArray()); return path;
+    }
+
+    [Fact]
+    public async Task ExportsOrderedImagesWithTransparentPaddingWithoutChangingOriginals()
+    {
+        var sources = new[] { Image("one.png", SKEncodedImageFormat.Png), Image("two.jpg", SKEncodedImageFormat.Jpeg), Image("three.webp", SKEncodedImageFormat.Webp) };
+        var originals = sources.Select(File.ReadAllBytes).ToArray();
+        var report = await new StickerPackExporter().ExportAsync(sources, directory, "My pack");
+        Assert.Equal(3, report.Exported); Assert.Empty(report.Errors); Assert.False(report.Cancelled);
+        for (var i = 0; i < sources.Length; i++)
+        {
+            var file = Path.Combine(report.Directory, $"{i + 1:000}.webp"); var bytes = await File.ReadAllBytesAsync(file);
+            Assert.InRange(bytes.Length, 1, StickerPackExporter.MaxFileBytes);
+            using var data = new SKMemoryStream(bytes); using var codec = SKCodec.Create(data);
+            Assert.Equal(SKEncodedImageFormat.Webp, codec.EncodedFormat);
+            using var output = SKBitmap.Decode(bytes); Assert.Equal(512, output.Width); Assert.Equal(512, output.Height);
+            Assert.Equal(0, output.GetPixel(256, 0).Alpha); Assert.True(output.GetPixel(256, 256).Red > 200);
+            Assert.Equal(originals[i], await File.ReadAllBytesAsync(sources[i]));
+        }
+        var second = await new StickerPackExporter().ExportAsync(sources, directory, "My pack");
+        Assert.NotEqual(report.Directory, second.Directory); Assert.True(File.Exists(Path.Combine(report.Directory, "001.webp")));
+    }
+
+    [Fact]
+    public async Task IsolatesDamagedFilesAndHonoursCancellation()
+    {
+        var source = Image("one.png", SKEncodedImageFormat.Png); var missing = Path.Combine(directory, "missing.png");
+        var report = await new StickerPackExporter().ExportAsync([missing, source], directory, "..\\pack");
+        Assert.Single(report.Errors); Assert.Equal(1, report.Exported); Assert.True(File.Exists(Path.Combine(report.Directory, "002.webp")));
+        Assert.Equal(Path.GetFullPath(directory), Path.GetDirectoryName(report.Directory));
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new StickerPackExporter().ExportAsync([source], directory, "cancelled", cancellationToken: cancelled.Token));
+        Assert.False(Directory.Exists(Path.Combine(directory, "cancelled")));
+    }
+
+    [Fact]
+    public async Task HighEntropyImageIsReducedBelowTelegramLimit()
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(512, 512, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        var random = new Random(9876);
+        for (var y = 0; y < 512; y++)
+            for (var x = 0; x < 512; x++) bitmap.SetPixel(x, y, new SKColor((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256)));
+        using var image = SKImage.FromBitmap(bitmap);
+        using var high = image.Encode(SKEncodedImageFormat.Webp, 100);
+        Assert.True(high.Size > StickerPackExporter.MaxFileBytes, "The fixture must exercise quality reduction.");
+        using var png = image.Encode(SKEncodedImageFormat.Png, 100); var path = Path.Combine(directory, "noise.png"); File.WriteAllBytes(path, png.ToArray());
+        var report = await new StickerPackExporter().ExportAsync([path], directory, "Noise");
+        Assert.Empty(report.Errors); Assert.Equal(1, report.Exported);
+        Assert.InRange(new FileInfo(Path.Combine(report.Directory, "001.webp")).Length, 1, StickerPackExporter.MaxFileBytes);
+    }
+
+    [Fact]
+    public async Task PreservesTransparentPixelsWithinImage()
+    {
+        using var bitmap = new SKBitmap(32, 32); bitmap.Erase(SKColors.Transparent);
+        for (var y = 0; y < 16; y++) for (var x = 0; x < 16; x++) bitmap.SetPixel(x, y, SKColors.Blue);
+        using var image = SKImage.FromBitmap(bitmap); using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+        var source = Path.Combine(directory, "alpha.png"); File.WriteAllBytes(source, png.ToArray());
+        var report = await new StickerPackExporter().ExportAsync([source], directory, "Alpha");
+        Assert.Empty(report.Errors); using var output = SKBitmap.Decode(Path.Combine(report.Directory, "001.webp"));
+        Assert.Equal(0, output.GetPixel(400, 400).Alpha); Assert.True(output.GetPixel(100, 100).Blue > 200);
+    }
+}
