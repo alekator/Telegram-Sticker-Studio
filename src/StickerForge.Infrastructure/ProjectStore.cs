@@ -6,7 +6,7 @@ namespace StickerForge.Infrastructure;
 public sealed class ProjectStore
 {
     private sealed record FileModel(int SchemaVersion, string Name, List<ItemModel> Stickers);
-    private sealed record ItemModel(Guid Id, string SourcePath);
+    private sealed record ItemModel(Guid Id, string SourcePath, TransformSettings? Transform = null);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
     public async Task SaveAsync(StickerProject project, string path, CancellationToken cancellationToken = default)
@@ -14,7 +14,7 @@ public sealed class ProjectStore
         path = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(path)!;
         var model = new FileModel(StickerProject.CurrentSchemaVersion, project.Name,
-            project.Stickers.Select(s => new ItemModel(s.Id, Path.GetRelativePath(directory, Path.GetFullPath(s.SourcePath)))).ToList());
+            project.Stickers.Select(s => new ItemModel(s.Id, Path.GetRelativePath(directory, Path.GetFullPath(s.SourcePath)), s.Transform)).ToList());
         var temporary = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
@@ -40,7 +40,7 @@ public sealed class ProjectStore
         return new StickerProject
         {
             Name = model.Name,
-            Stickers = model.Stickers.Select(s => new StickerItem { Id = s.Id, SourcePath = Path.GetFullPath(s.SourcePath, directory) }).ToList()
+            Stickers = model.Stickers.Select(s => new StickerItem { Id = s.Id, SourcePath = Path.GetFullPath(s.SourcePath, directory), Transform = s.Transform ?? new() }).ToList()
         };
     }
 }

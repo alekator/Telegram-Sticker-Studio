@@ -19,8 +19,56 @@ public sealed class ProjectTests : IDisposable
     public ProjectTests() => Directory.CreateDirectory(directory);
     public void Dispose() => Directory.Delete(directory, true);
 
+    [Theory]
+    [InlineData(FitMode.Fill)]
+    [InlineData(FitMode.Manual)]
+    public async Task TransformSettingsRoundTrip(FitMode mode)
+    {
+        var path = Path.Combine(directory, "pack.json");
+        var item = new StickerItem { SourcePath = Path.Combine(directory, "source.png"), Transform = new TransformSettings { Fit = mode, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, FlipHorizontal = true, FlipVertical = true, StartSeconds = 1, DurationSeconds = 2 } };
+        var store = new ProjectStore(); await store.SaveAsync(new StickerProject { Stickers = [item] }, path);
+        var saved = Assert.Single((await store.LoadAsync(path)).Stickers).Transform;
+        Assert.Equal(mode, saved.Fit); Assert.Equal(1.5, saved.Scale); Assert.Equal(20, saved.OffsetX); Assert.Equal(-30, saved.OffsetY); Assert.Equal(45, saved.Rotation); Assert.True(saved.FlipHorizontal); Assert.True(saved.FlipVertical); Assert.Equal(1, saved.StartSeconds); Assert.Equal(2, saved.DurationSeconds);
+    }
+
+    [Fact]
+    public async Task AnimatedItemsKeepIndependentTransformsAndFragments()
+    {
+        var path = Path.Combine(directory, "animated.json");
+        var first = new TransformSettings { Fit = FitMode.Fill, Scale = 1.5, OffsetX = 20, OffsetY = -30, Rotation = 45, FlipHorizontal = true, StartSeconds = .4, DurationSeconds = 1.2 };
+        var second = new TransformSettings { Fit = FitMode.Manual, Scale = .7, OffsetX = -15, OffsetY = 35, Rotation = -90, FlipVertical = true, StartSeconds = 2.1, DurationSeconds = .8 };
+        var store = new ProjectStore();
+        await store.SaveAsync(new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "a.gif"), Transform = first }, new() { SourcePath = Path.Combine(directory, "b.mp4"), Transform = second }] }, path);
+        var loaded = await store.LoadAsync(path);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(first), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[0].Transform));
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(second), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[1].Transform));
+    }
+
+    [Fact]
+    public async Task ExistingProjectWithoutReflectionSettingsKeepsOriginalOrientation()
+    {
+        var path = Path.Combine(directory, "old.json");
+        await File.WriteAllTextAsync(path, """
+            {"schemaVersion":1,"name":"old","stickers":[{"id":"11111111-1111-1111-1111-111111111111","sourcePath":"image.png","transform":{"fit":1,"scale":1.5,"offsetX":12,"rotation":90}}]}
+            """);
+        var transform = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers).Transform;
+        Assert.Equal(FitMode.Fill, transform.Fit); Assert.Equal(1.5, transform.Scale); Assert.Equal(12, transform.OffsetX); Assert.Equal(90, transform.Rotation);
+        Assert.False(transform.FlipHorizontal); Assert.False(transform.FlipVertical);
+    }
+
     [Fact]
     public void NewProjectIsEmpty() => Assert.Empty(new StickerProject().Stickers);
+
+    [Fact]
+    public void PanelLayoutRestoresWidthsAndVisibilityAndToleratesDamagedSettings()
+    {
+        var path = Path.Combine(directory, "settings", "panels.json");
+        var store = new PanelLayoutStore(path);
+        store.Save(new PanelLayout(410, 260, false, true));
+        Assert.Equal(new PanelLayout(410, 260, false, true), new PanelLayoutStore(path).Load());
+        File.WriteAllText(path, "{ повреждённый файл");
+        Assert.Equal(new PanelLayout(), store.Load());
+    }
 
     [Fact]
     public async Task SaveLoadPreservesOrderAndMissingSources()
@@ -34,6 +82,7 @@ public sealed class ProjectTests : IDisposable
         var json = await File.ReadAllTextAsync(path);
         Assert.DoesNotContain(directory.Replace("\\", "\\\\"), json);
         var loaded = await store.LoadAsync(path);
+        Assert.False(loaded.Stickers[0].Transform.FlipHorizontal); Assert.False(loaded.Stickers[0].Transform.FlipVertical);
         Assert.Equal("Pack", loaded.Name);
         Assert.Equal(new[] { first, second }, loaded.Stickers.Select(x => x.SourcePath));
         Assert.False(File.Exists(loaded.Stickers[0].SourcePath));
