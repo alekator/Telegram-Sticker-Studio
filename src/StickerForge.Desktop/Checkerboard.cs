@@ -1,13 +1,14 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 
 namespace StickerForge.Desktop;
 
 public sealed class Checkerboard : Control
 {
-    private static readonly IBrush Dark = new SolidColorBrush(Color.Parse("#0D1C30"));
-    private static readonly IBrush Light = new SolidColorBrush(Color.Parse("#1B3049"));
+    private static readonly IBrush Dark = new ImmutableSolidColorBrush(Color.Parse("#0D1C30"));
+    private static readonly IBrush Light = new ImmutableSolidColorBrush(Color.Parse("#1B3049"));
     public override void Render(DrawingContext context)
     {
         base.Render(context);

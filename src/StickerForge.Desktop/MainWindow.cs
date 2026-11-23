@@ -129,6 +129,14 @@ public sealed class MainWindow : Window
         Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelToggleHover) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pressed").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelTogglePressed) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<RepeatButton>().Name("PART_DecreaseButton").Template().OfType<Border>().Name("TrackBackground")) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderActive) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<RepeatButton>().Name("PART_IncreaseButton").Template().OfType<Border>().Name("TrackBackground")) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderTrack) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<Thumb>().Name("thumb").Template().OfType<Border>()) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderThumb), new Setter(BorderBrushProperty, studioTheme.SliderActive), new Setter(BorderThicknessProperty, new Thickness(1)) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<Thumb>().Name("thumb").Class(":pointerover").Template().OfType<Border>()) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderHover) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<Thumb>().Name("thumb").Class(":pressed").Template().OfType<Border>()) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderPressed) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Class(":focus-visible").Template().OfType<Thumb>().Name("thumb").Template().OfType<Border>()) { Setters = { new Setter(BorderThicknessProperty, new Thickness(2)), new Setter(BorderBrushProperty, studioTheme.SliderHover) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Class(":disabled").Template().OfType<RepeatButton>().Template().OfType<Border>().Name("TrackBackground")) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderDisabled) } });
+        Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Class(":disabled").Template().OfType<Thumb>().Name("thumb").Template().OfType<Border>()) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderDisabled), new Setter(BorderBrushProperty, studioTheme.SliderDisabled) } });
         Width = 1280; Height = 760; MinWidth = 700; MinHeight = 520;
         Background = studioTheme.Background; Foreground = studioTheme.Text; Resources["SystemAccentColor"] = studioTheme.Accent.Color;
         Resources["SystemControlHighlightAccentBrush"] = studioTheme.Accent;
@@ -281,21 +289,23 @@ public sealed class MainWindow : Window
         Grid.SetColumn(center, 2); columns.Children.Add(center);
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
-        var properties = new StackPanel { Spacing = 10 };
+        var properties = new StackPanel { Spacing = 8 };
         editingProperties = properties;
         properties.Children.Add(new TextBlock { Text = "Редактирование", FontSize = 17, FontWeight = FontWeight.SemiBold });
         properties.Children.Add(details);
         properties.Children.Add(new TextBlock { Text = "Режим подгонки", FontWeight = FontWeight.SemiBold });
         properties.Children.Add(fitMode);
-        properties.Children.Add(new TextBlock { Text = "Точная настройка", FontWeight = FontWeight.SemiBold });
-        foreach (var (label, slider) in new[] { (scaleLabel, scale), (rotationLabel, rotation), (offsetXLabel, offsetX), (offsetYLabel, offsetY) })
+        var sizeSection = new StackPanel { Spacing = 4 };
+        var rotationSection = new StackPanel { Spacing = 4 };
+        foreach (var (label, slider) in new[] { (scaleLabel, scale), (offsetXLabel, offsetX), (offsetYLabel, offsetY), (rotationLabel, rotation) })
         {
+            slider.Classes.Add("edit-slider");
             var input = CreateSliderInput(slider, ReferenceEquals(slider, scale) ? 100 : 1);
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"), ColumnSpacing = 8 };
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("90,*,68"), ColumnSpacing = 6 };
             label.VerticalAlignment = VerticalAlignment.Center; row.Children.Add(label);
-            Grid.SetColumn(input, 1); row.Children.Add(input);
-            var parameter = new StackPanel { Spacing = 4, Margin = new Thickness(0, 4, 0, 0) };
-            parameter.Children.Add(row); parameter.Children.Add(slider); properties.Children.Add(parameter);
+            slider.VerticalAlignment = VerticalAlignment.Center; slider.MinWidth = 0; slider.MinHeight = 0; slider.Height = 40; Grid.SetColumn(slider, 1); row.Children.Add(slider);
+            Grid.SetColumn(input, 2); row.Children.Add(input);
+            (ReferenceEquals(slider, rotation) ? rotationSection : sizeSection).Children.Add(row);
             slider.PropertyChanged += async (_, e) => { if (e.Property == RangeBase.ValueProperty) { UpdateTransformLabels(); await TransformChangedAsync(); } };
             if (ReferenceEquals(slider, rotation))
             {
@@ -303,16 +313,17 @@ public sealed class MainWindow : Window
                 rotationActions.Children.Add(Button("↶ 90°", () => { RotateBy(-90); return Task.CompletedTask; }, "Повернуть на 90° влево"));
                 rotationActions.Children.Add(Button("↷ 90°", () => { RotateBy(90); return Task.CompletedTask; }, "Повернуть на 90° вправо"));
                 rotationActions.Children.Add(Button("Сбросить поворот", () => { rotation.Value = 0; return Task.CompletedTask; }));
-                properties.Children.Add(rotationActions);
+                rotationSection.Children.Add(rotationActions);
             }
         }
-        properties.Children.Add(new TextBlock { Text = "Отражение", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) });
-        var flipActions = new WrapPanel(); flipActions.Children.Add(flipHorizontal); flipActions.Children.Add(flipVertical); properties.Children.Add(flipActions);
+        properties.Children.Add(PropertySection("Размер и положение", sizeSection));
+        rotationSection.Children.Add(new TextBlock { Text = "Отражение", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 4, 0, 0) });
+        var flipActions = new WrapPanel(); flipActions.Children.Add(flipHorizontal); flipActions.Children.Add(flipVertical); rotationSection.Children.Add(flipActions);
+        properties.Children.Add(PropertySection("Поворот и отражение", rotationSection));
         flipHorizontal.Margin = new Thickness(0, 0, 12, 0);
         flipHorizontal.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
         flipVertical.PropertyChanged += async (_, e) => { if (e.Property == ToggleButton.IsCheckedProperty) await TransformChangedAsync(); };
         fitMode.SelectionChanged += async (_, _) => await FitModeChangedAsync();
-        properties.Children.Add(Button("Сбросить подгонку", ResetSelectedAsync));
         var timelineHeader = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         timelineHeader.Children.Add(new TextBlock { Text = "Фрагмент анимации", FontWeight = FontWeight.SemiBold });
         Grid.SetColumn(sourceDurationLabel, 1); timelineHeader.Children.Add(sourceDurationLabel); animationPanel.Children.Add(timelineHeader);
@@ -340,9 +351,11 @@ public sealed class MainWindow : Window
         videoTime.VerticalAlignment = VerticalAlignment.Center; videoTime.Margin = new Thickness(6, 0);
         timelineControls.Children.Add(videoTime); animationPanel.Children.Add(timelineControls);
         properties.Children.Add(groupPanel);
-        properties.Children.Add(new TextBlock { Text = "Масштаб просмотра", FontWeight = FontWeight.SemiBold });
-        properties.Children.Add(Button("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }));
-        properties.Children.Add(Button("Показать 1:1", () => { ActualPreviewSize(); return Task.CompletedTask; }));
+        var viewActions = new WrapPanel();
+        viewActions.Children.Add(Button("Уместить в окно", () => { FitPreview(); return Task.CompletedTask; }));
+        viewActions.Children.Add(Button("Показать 1:1", () => { ActualPreviewSize(); return Task.CompletedTask; }));
+        properties.Children.Add(PropertySection("Просмотр", viewActions));
+        var reset = Button("Сбросить подгонку", ResetSelectedAsync); reset.HorizontalAlignment = HorizontalAlignment.Stretch; reset.HorizontalContentAlignment = HorizontalAlignment.Center; properties.Children.Add(reset);
         videoSeek.PropertyChanged += (_, e) =>
         {
             if (e.Property == RangeBase.ValueProperty && !updatingSeek && videoPath is not null)
@@ -362,10 +375,10 @@ public sealed class MainWindow : Window
         propertiesVisibilityButton = PanelVisibilityButton("PropertiesVisibility", ToggleProperties);
         Grid.SetColumn(galleryVisibilityButton, 1); columns.Children.Add(galleryVisibilityButton);
         Grid.SetColumn(propertiesVisibilityButton, 3); columns.Children.Add(propertiesVisibilityButton);
-        gallerySplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(true), DispatcherPriority.Loaded));
-        propertiesSplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(false), DispatcherPriority.Loaded));
-        gallerySplitter.KeyUp += (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(true), DispatcherPriority.Loaded);
-        propertiesSplitter.KeyUp += (_, _) => Dispatcher.UIThread.Post(() => CapturePanelWidth(false), DispatcherPriority.Loaded);
+        gallerySplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => CapturePanelWidth(true));
+        propertiesSplitter.AddHandler(Thumb.DragCompletedEvent, (_, _) => CapturePanelWidth(false));
+        gallerySplitter.KeyUp += (_, _) => CapturePanelWidth(true);
+        propertiesSplitter.KeyUp += (_, _) => CapturePanelWidth(false);
         ApplyPanelLayout();
         SizeChanged += (_, _) => ApplyPanelLayout();
         editorPage = columns;
@@ -466,6 +479,13 @@ public sealed class MainWindow : Window
         button.Content = content;
         return button;
     }
+    private Border PropertySection(string title, Control content)
+    {
+        var stack = new StackPanel { Spacing = 6 };
+        stack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.SemiBold });
+        stack.Children.Add(content);
+        return new Border { Background = studioTheme.Surface, BorderBrush = studioTheme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(10), Child = stack };
+    }
     private Button PanelVisibilityButton(string name, Action action)
     {
         var button = new Button { Name = name, Width = 32, Height = 40, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), Margin = new Thickness(0), Background = studioTheme.PanelToggleSurface, BorderBrush = studioTheme.PanelToggleBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
@@ -528,7 +548,7 @@ public sealed class MainWindow : Window
     }
     private static TextBox CreateSliderInput(Slider slider, double factor)
     {
-        var input = new TextBox { MinWidth = 100, Height = 34, VerticalAlignment = VerticalAlignment.Center,
+        var input = new TextBox { MinWidth = 68, Height = 34, VerticalAlignment = VerticalAlignment.Center,
             Text = Math.Round(slider.Value * factor).ToString(CultureInfo.CurrentCulture) };
         void Refresh() => input.Text = Math.Round(slider.Value * factor).ToString(CultureInfo.CurrentCulture);
         void Commit()
@@ -556,8 +576,9 @@ public sealed class MainWindow : Window
     private void CapturePanelWidth(bool gallerySide)
     {
         if (workspaceGrid is null) return;
-        if (gallerySide && galleryPanel is { IsVisible: true }) layout = layout with { GalleryWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[0].ActualWidth, 180, 600) };
-        if (!gallerySide && layout.PropertiesVisible) layout = layout with { PropertiesWidth = Math.Clamp(workspaceGrid.ColumnDefinitions[4].ActualWidth, 270, 500) };
+        static double Width(ColumnDefinition column) => column.Width.IsAbsolute ? column.Width.Value : column.ActualWidth;
+        if (gallerySide && galleryPanel is { IsVisible: true }) layout = layout with { GalleryWidth = Math.Clamp(Width(workspaceGrid.ColumnDefinitions[0]), 180, 600) };
+        if (!gallerySide && propertiesSide is { IsVisible: true }) layout = layout with { PropertiesWidth = Math.Clamp(Width(workspaceGrid.ColumnDefinitions[4]), 270, 500) };
     }
     private void ApplyPanelLayout()
     {
@@ -572,8 +593,8 @@ public sealed class MainWindow : Window
         var columns = workspaceGrid.ColumnDefinitions;
         columns[0].MinWidth = showGallery ? 180 : 0; columns[4].MinWidth = showProperties ? 270 : 0;
         columns[1].Width = new GridLength(hasItems ? 32 : 0); columns[3].Width = new GridLength(hasItems ? 32 : 0);
-        var leftWidth = showGallery ? Math.Min(layout.GalleryWidth, 300) : 0;
-        var rightWidth = showProperties ? Math.Clamp(layout.PropertiesWidth, 270, 340) : 0;
+        var leftWidth = showGallery ? Math.Clamp(layout.GalleryWidth, 180, 600) : 0;
+        var rightWidth = showProperties ? Math.Clamp(layout.PropertiesWidth, 270, 500) : 0;
         var clientWidth = ClientSize.Width > 0 ? ClientSize.Width : Width;
         var centralMinimum = Math.Clamp(clientWidth - 16 - (hasItems ? 64 : 0) - (showProperties ? 270 : 0), 320, 400);
         var available = Math.Max(0, clientWidth - 16 - centralMinimum - (hasItems ? 64 : 0));

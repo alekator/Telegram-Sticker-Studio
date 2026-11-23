@@ -25,6 +25,12 @@ internal sealed class StudioTheme
     public readonly SolidColorBrush PanelTogglePressed = new();
     public readonly SolidColorBrush PanelToggleBorder = new();
     public readonly SolidColorBrush PanelToggleIcon = new();
+    public readonly SolidColorBrush SliderTrack = new();
+    public readonly SolidColorBrush SliderActive = new();
+    public readonly SolidColorBrush SliderThumb = new();
+    public readonly SolidColorBrush SliderHover = new();
+    public readonly SolidColorBrush SliderPressed = new();
+    public readonly SolidColorBrush SliderDisabled = new();
     public void Apply(bool light)
     {
         Background.Color = Color.Parse(light ? "#F2F5F8" : "#071426");
@@ -41,5 +47,11 @@ internal sealed class StudioTheme
         PanelTogglePressed.Color = Color.Parse(light ? "#ACCADF" : "#577F9D");
         PanelToggleBorder.Color = Color.Parse(light ? "#9EB5C7" : "#65829A");
         PanelToggleIcon.Color = Color.Parse(light ? "#263946" : "#F5F9FC");
+        SliderTrack.Color = Color.Parse(light ? "#AFC6D8" : "#365571");
+        SliderActive.Color = Color.Parse(light ? "#006DCC" : "#078BFA");
+        SliderThumb.Color = Color.Parse(light ? "#006DCC" : "#EAF6FF");
+        SliderHover.Color = Color.Parse(light ? "#0089EB" : "#A7DCFF");
+        SliderPressed.Color = Color.Parse(light ? "#00549B" : "#6ABEFF");
+        SliderDisabled.Color = Color.Parse(light ? "#BBC6CE" : "#526677");
     }
 }

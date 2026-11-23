@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
 using StickerForge.Desktop;
 using StickerForge.Infrastructure;
 
@@ -16,6 +17,116 @@ namespace StickerForge.Tests;
 [Collection("Avalonia Headless")]
 public sealed class UiPreferencesTests
 {
+    [Fact]
+    public async Task EditingSlidersUseThemeColorsAndRemainReadableWhenDisabled()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-slider-theme-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(() =>
+            {
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "panels.json")), new UiPreferencesStore(Path.Combine(directory, "ui.json"))) { Width = 1280, Height = 800 };
+                try
+                {
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    project.Stickers.Add(new StickerForge.Core.StickerItem { SourcePath = Path.Combine(directory, "missing.png") });
+                    typeof(MainWindow).GetMethod("RefreshGallery", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+                    window.Show(); var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!; gallery.SelectedIndex = 0; window.UpdateLayout();
+                    var slider = (Slider)typeof(MainWindow).GetField("scale", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    foreach (var theme in new[] { "dark", "light", "system" })
+                    {
+                        typeof(MainWindow).GetField("preferences", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, new UiPreferences("ru", theme));
+                        typeof(MainWindow).GetMethod("ApplyPreferences", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+                        window.MouseMove(new Point(1, 1), RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        var light = theme == "light" || (theme == "system" && window.ActualThemeVariant == ThemeVariant.Light);
+                        var track = slider.GetVisualDescendants().OfType<Border>().Where(x => x.Name == "TrackBackground").ToArray();
+                        var thumb = slider.GetVisualDescendants().OfType<Thumb>().Single(x => x.Name == "thumb");
+                        var thumbBorder = thumb.GetVisualDescendants().OfType<Border>().First();
+                        Assert.Equal(Color.Parse(light ? "#006DCC" : "#078BFA"), Assert.IsAssignableFrom<ISolidColorBrush>(track[0].Background).Color);
+                        Assert.Equal(Color.Parse(light ? "#AFC6D8" : "#365571"), Assert.IsAssignableFrom<ISolidColorBrush>(track[1].Background).Color);
+                        Assert.Equal(Color.Parse(light ? "#006DCC" : "#EAF6FF"), Assert.IsAssignableFrom<ISolidColorBrush>(thumbBorder.Background).Color);
+                        slider.Focus(NavigationMethod.Tab); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(new Thickness(2), thumbBorder.BorderThickness);
+                        var origin = thumb.TranslatePoint(new Point(0, 0), window)!.Value; var point = new Point(origin.X + thumb.Bounds.Width / 2, origin.Y + thumb.Bounds.Height / 2);
+                        window.MouseMove(point, RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(Color.Parse(light ? "#0089EB" : "#A7DCFF"), Assert.IsAssignableFrom<ISolidColorBrush>(thumbBorder.Background).Color);
+                        window.MouseDown(point, MouseButton.Left, RawInputModifiers.None); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(Color.Parse(light ? "#00549B" : "#6ABEFF"), Assert.IsAssignableFrom<ISolidColorBrush>(thumbBorder.Background).Color);
+                        window.MouseUp(point, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+                        slider.IsEnabled = false; Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                        Assert.Equal(Color.Parse(light ? "#BBC6CE" : "#526677"), Assert.IsAssignableFrom<ISolidColorBrush>(thumbBorder.Background).Color);
+                        Assert.All(track, x => Assert.Equal(Color.Parse(light ? "#BBC6CE" : "#526677"), Assert.IsAssignableFrom<ISolidColorBrush>(x.Background).Color));
+                        slider.IsEnabled = true;
+                    }
+                }
+                finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+    [Fact]
+    public async Task ResizedPanelsSurviveSelectionCollapseResizeAndRestart()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-panel-width-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(() =>
+            {
+                var panelPath = Path.Combine(directory, "panels.json");
+                var window = new MainWindow(new PanelLayoutStore(panelPath), new UiPreferencesStore(Path.Combine(directory, "ui.json"))) { Width = 1800, Height = 900 };
+                void AddItems(MainWindow w)
+                {
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(w)!;
+                    project.Stickers.Add(new StickerForge.Core.StickerItem { SourcePath = Path.Combine(directory, "one.png") });
+                    project.Stickers.Add(new StickerForge.Core.StickerItem { SourcePath = Path.Combine(directory, "two.png") });
+                    typeof(MainWindow).GetMethod("RefreshGallery", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(w, null);
+                }
+                Grid GridOf(MainWindow w) => (Grid)typeof(MainWindow).GetField("workspaceGrid", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(w)!;
+                void DragSplitter(string field, double delta)
+                {
+                    var splitter = (GridSplitter)typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var origin = splitter.TranslatePoint(new Point(0, 0), window)!.Value;
+                    var point = new Point(origin.X + splitter.Bounds.Width / 2, origin.Y + 30);
+                    window.MouseMove(point, RawInputModifiers.None); window.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseMove(new Point(point.X + delta, point.Y), RawInputModifiers.LeftMouseButton);
+                    window.MouseUp(new Point(point.X + delta, point.Y), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+                    Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                }
+                try
+                {
+                    AddItems(window); window.Show(); window.UpdateLayout();
+                    DragSplitter("gallerySplitter", 110); DragSplitter("propertiesSplitter", -100);
+                    var grid = GridOf(window); var galleryWidth = grid.ColumnDefinitions[0].ActualWidth; var propertiesWidth = grid.ColumnDefinitions[4].ActualWidth;
+                    Assert.InRange(galleryWidth, 370, 390); Assert.InRange(propertiesWidth, 390, 410);
+                    var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    gallery.SelectedIndex = 0; gallery.SelectedIndex = 1; window.UpdateLayout();
+                    Assert.InRange(grid.ColumnDefinitions[0].ActualWidth, galleryWidth - 1, galleryWidth + 1);
+                    Assert.InRange(grid.ColumnDefinitions[4].ActualWidth, propertiesWidth - 1, propertiesWidth + 1);
+                    var left = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "GalleryVisibility");
+                    var right = window.GetVisualDescendants().OfType<Button>().Single(x => x.Name == "PropertiesVisibility");
+                    void Click(Button b) => b.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Click(left); Click(right); Click(left); Click(right); window.UpdateLayout();
+                    Assert.InRange(grid.ColumnDefinitions[0].ActualWidth, galleryWidth - 1, galleryWidth + 1);
+                    Assert.InRange(grid.ColumnDefinitions[4].ActualWidth, propertiesWidth - 1, propertiesWidth + 1);
+                    window.Width = 960; Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                    Assert.True(grid.ColumnDefinitions[0].ActualWidth < galleryWidth);
+                    window.Width = 1800; Avalonia.Threading.Dispatcher.UIThread.RunJobs(); window.UpdateLayout();
+                    Assert.InRange(grid.ColumnDefinitions[0].ActualWidth, galleryWidth - 1, galleryWidth + 1);
+                    Assert.InRange(grid.ColumnDefinitions[4].ActualWidth, propertiesWidth - 1, propertiesWidth + 1);
+                    window.Close();
+                    var saved = new PanelLayoutStore(panelPath).Load();
+                    Assert.InRange(saved.GalleryWidth, galleryWidth - 1, galleryWidth + 1); Assert.InRange(saved.PropertiesWidth, propertiesWidth - 1, propertiesWidth + 1);
+                    var reopened = new MainWindow(new PanelLayoutStore(panelPath), new UiPreferencesStore(Path.Combine(directory, "ui.json"))) { Width = 1800, Height = 900 };
+                    try { AddItems(reopened); reopened.Show(); reopened.UpdateLayout(); var restored = GridOf(reopened); Assert.InRange(restored.ColumnDefinitions[0].ActualWidth, galleryWidth - 1, galleryWidth + 1); Assert.InRange(restored.ColumnDefinitions[4].ActualWidth, propertiesWidth - 1, propertiesWidth + 1); }
+                    finally { reopened.Close(); }
+                }
+                finally { if (window.IsVisible) window.Close(); }
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
     [Fact]
     public async Task PanelButtonsUseThemeColorsAndDistinctPointerStates()
     {
