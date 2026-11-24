@@ -25,7 +25,8 @@ public static class TextLayerRenderer
         using var font = new SKFont(typeface, (float)Math.Clamp(layer.FontSize, 1, 512));
         var color = SKColor.TryParse(layer.Color, out var parsed) ? parsed : SKColors.White;
         using var paint = new SKPaint { IsAntialias = true, Color = color.WithAlpha((byte)Math.Clamp(Math.Round(color.Alpha * Math.Clamp(layer.Opacity, 0, 1)), 0, 255)) };
-        var lines = layer.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        var displayText = layer.Case switch { TextCase.Upper => layer.Text.ToUpperInvariant(), TextCase.Lower => layer.Text.ToLowerInvariant(), _ => layer.Text };
+        var lines = displayText.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
         var spacing = (float)Math.Clamp(layer.LetterSpacing, -100, 100);
         var metrics = font.Metrics;
         var lineHeight = Math.Max(1, metrics.Descent - metrics.Ascent + metrics.Leading) * (float)Math.Clamp(layer.LineSpacing, .1, 10);
@@ -33,6 +34,8 @@ public static class TextLayerRenderer
         canvas.Translate((float)layer.X, (float)layer.Y);
         canvas.RotateDegrees((float)layer.Rotation);
         canvas.Scale((float)Math.Clamp(layer.Scale, .01, 20));
+        canvas.Skew((float)Math.Clamp(layer.Skew, -2, 2), 0);
+        canvas.Scale((float)Math.Clamp(layer.StretchX, .1, 10), (float)Math.Clamp(layer.StretchY, .1, 10));
         var firstBaseline = -(lines.Length - 1) * lineHeight / 2 - (metrics.Ascent + metrics.Descent) / 2;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
@@ -83,6 +86,11 @@ public static class TextLayerRenderer
                 var clusterCount = shaped.Sum(run => run.Clusters.Distinct().Count());
                 var width = shaped.Sum(run => run.Width) + Math.Max(0, clusterCount - 1) * spacing;
                 var x = layer.Alignment switch { TextLayerAlignment.Left => 0, TextLayerAlignment.Right => -width, _ => -width / 2 };
+                var lineX = x;
+                var lineBaseline = firstBaseline + lineIndex * lineHeight;
+                using var gradient = CreateGradient(layer, lineX, lineBaseline + metrics.Ascent, width, metrics.Descent - metrics.Ascent);
+                paint.Shader = gradient;
+                paint.Color = gradient is null ? ApplyOpacity(color, layer.Opacity) : SKColors.White;
                 for (var runIndex = 0; runIndex < runs.Count; runIndex++)
                 {
                     var run = runs[runIndex]; var result = shaped[runIndex]; var points = result.Points.ToArray();
@@ -95,13 +103,83 @@ public static class TextLayerRenderer
                     using var builder = new SKTextBlobBuilder();
                     builder.AddPositionedRun(result.Codepoints.Select(glyph => (ushort)glyph).ToArray(), run.Font, points);
                     using var blob = builder.Build();
-                    if (blob is not null) canvas.DrawText(blob, x, firstBaseline + lineIndex * lineHeight, paint);
+                    if (blob is not null)
+                    {
+                        var baseline = firstBaseline + lineIndex * lineHeight;
+                        if (layer.Shadow is { Enabled: true } shadow && SKColor.TryParse(shadow.Color, out var shadowColor))
+                        {
+                            using var shadowPaint = new SKPaint { IsAntialias = true, Color = ApplyOpacity(shadowColor, shadow.Opacity * layer.Opacity) };
+                            using var blur = shadow.Blur > 0 ? SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Clamp(shadow.Blur, .01, 100)) : null;
+                            shadowPaint.MaskFilter = blur;
+                            canvas.DrawText(blob, x + (float)shadow.OffsetX, baseline + (float)shadow.OffsetY, shadowPaint);
+                        }
+                        if (layer.Glow is { Enabled: true, Radius: > 0 } glow && SKColor.TryParse(glow.Color, out var glowColor))
+                        {
+                            using var glowPaint = new SKPaint { IsAntialias = true, Color = ApplyOpacity(glowColor, glow.Opacity * layer.Opacity) };
+                            using var glowBlur = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Clamp(glow.Radius, .01, 100));
+                            glowPaint.MaskFilter = glowBlur;
+                            canvas.DrawText(blob, x, baseline, glowPaint);
+                        }
+                        foreach (var outline in (layer.Outlines ?? []).Where(o => o.Enabled && o.Placement == TextOutlinePlacement.Outside).Reverse())
+                        {
+                            if (!SKColor.TryParse(outline.Color, out var outlineColor)) continue;
+                            using var stroke = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeJoin = SKStrokeJoin.Round, StrokeWidth = (float)Math.Clamp(outline.Width, 0, 100) * 2, Color = ApplyOpacity(outlineColor, outline.Opacity * layer.Opacity) };
+                            canvas.DrawText(blob, x, baseline, stroke);
+                        }
+                        canvas.DrawText(blob, x, baseline, paint);
+                        foreach (var outline in (layer.Outlines ?? []).Where(o => o.Enabled && o.Placement != TextOutlinePlacement.Outside).Reverse())
+                        {
+                            if (!SKColor.TryParse(outline.Color, out var outlineColor)) continue;
+                            var widthFactor = outline.Placement == TextOutlinePlacement.Inside ? 2 : 1;
+                            using var stroke = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeJoin = SKStrokeJoin.Round, StrokeWidth = (float)Math.Clamp(outline.Width, 0, 100) * widthFactor, Color = ApplyOpacity(outlineColor, outline.Opacity * layer.Opacity) };
+                            if (outline.Placement == TextOutlinePlacement.Inside)
+                            {
+                                using var glyphs = new SKPath();
+                                for (var i = 0; i < result.Codepoints.Length; i++)
+                                {
+                                    using var glyph = run.Font.GetGlyphPath((ushort)result.Codepoints[i]);
+                                    if (glyph is not null) glyphs.AddPath(glyph, x + points[i].X, baseline + points[i].Y);
+                                }
+                                canvas.Save();
+                                canvas.ClipPath(glyphs, SKClipOperation.Intersect, true);
+                                canvas.DrawText(blob, x, baseline, stroke);
+                                canvas.Restore();
+                            }
+                            else canvas.DrawText(blob, x, baseline, stroke);
+                        }
+                        if (layer.Underline || layer.Strikethrough)
+                        {
+                            using var linePaint = new SKPaint { IsAntialias = true, Color = paint.Color, StrokeWidth = Math.Max(1, font.Size / 18) };
+                            if (layer.Underline) canvas.DrawLine(x, baseline + font.Size * .12f, x + result.Width, baseline + font.Size * .12f, linePaint);
+                            if (layer.Strikethrough) canvas.DrawLine(x, baseline - font.Size * .3f, x + result.Width, baseline - font.Size * .3f, linePaint);
+                        }
+                    }
                     x += result.Width + (clusters + 1) * spacing;
                 }
             }
             finally { foreach (var run in runs) if (run.Fallback is not null) { run.Font.Dispose(); run.Fallback.Dispose(); } }
         }
         canvas.Restore();
+    }
+
+    private static SKColor ApplyOpacity(SKColor color, double opacity) => color.WithAlpha((byte)Math.Clamp(Math.Round(color.Alpha * Math.Clamp(opacity, 0, 1)), 0, 255));
+
+    private static SKShader? CreateGradient(TextLayer layer, float x, float y, float width, float height)
+    {
+        if (layer.Gradient is not { Enabled: true } gradient) return null;
+        var stops = (gradient.Stops ?? []).Where(s => SKColor.TryParse(s.Color, out _)).OrderBy(s => s.Position).ToArray();
+        if (stops.Length < 2) return null;
+        var colors = stops.Select(s => { SKColor.TryParse(s.Color, out var c); return ApplyOpacity(c, layer.Opacity); }).ToArray();
+        var positions = stops.Select(s => (float)Math.Clamp(s.Position, 0, 1)).ToArray();
+        var center = new SKPoint(x + width / 2, y + height / 2);
+        var angle = (float)(gradient.Angle * Math.PI / 180);
+        var radius = Math.Max(1, Math.Max(width, height) / 2);
+        return gradient.Kind switch
+        {
+            TextGradientKind.Radial => SKShader.CreateRadialGradient(center, radius, colors, positions, SKShaderTileMode.Clamp),
+            TextGradientKind.Angular => SKShader.CreateSweepGradient(center, colors, positions, SKMatrix.CreateRotation(angle, center.X, center.Y)),
+            _ => SKShader.CreateLinearGradient(new SKPoint(center.X - MathF.Cos(angle) * radius, center.Y - MathF.Sin(angle) * radius), new SKPoint(center.X + MathF.Cos(angle) * radius, center.Y + MathF.Sin(angle) * radius), colors, positions, SKShaderTileMode.Clamp)
+        };
     }
 
     internal static (string Text, bool RightToLeft)[] GetVisualRuns(string line)

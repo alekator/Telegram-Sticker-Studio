@@ -65,7 +65,7 @@ public sealed class ProjectTests : IDisposable
     public async Task TextLayersRoundTripIndependentlyAndInOrder()
     {
         var path = Path.Combine(directory, "text.json");
-        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", FontAsset = "roboto/Roboto[wdth,wght].ttf", X = 42, Y = 180, Rotation = -25, IsLocked = true };
+        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", FontAsset = "roboto/Roboto[wdth,wght].ttf", X = 42, Y = 180, Rotation = -25, IsLocked = true, Case = TextCase.Upper, Underline = true, StretchX = 1.4, Outlines = [new() { Enabled = true, Width = 7, Color = "#FF123456" }], Shadow = new() { Enabled = true, OffsetX = 9, Blur = 5 }, Glow = new() { Enabled = true, Radius = 12 }, Gradient = new() { Enabled = true, Kind = TextGradientKind.Angular, Angle = 30, Stops = [new() { Color = "#80FF0000", Position = .25 }, new() { Color = "#FF00FFFF", Position = .8 }] } };
         var second = new TextLayer { Text = "Second", IsVisible = false, LetterSpacing = 2 };
         var project = new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "one.png"), TextLayers = [first, second] }, new() { SourcePath = Path.Combine(directory, "two.gif") }] };
         var store = new ProjectStore();

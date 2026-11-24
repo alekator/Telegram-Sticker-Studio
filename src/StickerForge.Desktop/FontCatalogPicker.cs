@@ -46,7 +46,16 @@ internal sealed class FontCatalogPicker : StackPanel
         cyrillic.Content = Tr("Кириллица", "Cyrillic"); Children.Add(cyrillic);
         if (catalog is null) Children.Add(new TextBlock { Text = Tr("Встроенная библиотека шрифтов отсутствует.", "Bundled font library is unavailable."), TextWrapping = TextWrapping.Wrap, Foreground = theme.Secondary });
         scriptValues = catalog?.Families.SelectMany(f => f.Subsets).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray() ?? [];
-        scripts.ItemsSource = new[] { Tr("Все письменности", "All scripts") }.Concat(scriptValues).ToArray(); scripts.SelectedIndex = 0; Children.Add(scripts);
+        scripts.ItemsSource = new[] { Tr("Все письменности", "All scripts") }.Concat(scriptValues.Select(ScriptName)).ToArray(); scripts.SelectedIndex = 0; Children.Add(scripts);
+        Resources["SystemAccentColor"] = theme.Accent.Color;
+        Resources["SystemControlHighlightAccentBrush"] = theme.Accent;
+        Resources["SystemControlHighlightListAccentLowBrush"] = theme.Selected;
+        Resources["SystemControlHighlightListAccentMediumBrush"] = theme.Selected;
+        Resources["SystemControlHighlightListAccentHighBrush"] = theme.Accent;
+        Resources["SystemControlHighlightListLowBrush"] = theme.Surface;
+        Resources["SystemControlHighlightListMediumBrush"] = theme.Selected;
+        Resources["SystemControlFocusVisualPrimaryBrush"] = theme.Accent;
+        Resources["SystemControlFocusVisualSecondaryBrush"] = theme.Panel;
         list.Background = theme.Panel;
         list.Foreground = theme.Text;
         list.Resources["SystemControlHighlightAccentBrush"] = theme.Accent;
@@ -125,5 +134,27 @@ internal sealed class FontCatalogPicker : StackPanel
         return systemCyrillic[name] = font.GetGlyphs("Привет").All(glyph => glyph != 0);
     }
     private void Save() => stateStore.Save(new FontPreferences(favorites, recent));
+    private string ScriptName(string key)
+    {
+        var names = key switch
+        {
+            "adlam" => ("Адлам", "Adlam"), "arabic" => ("Арабская", "Arabic"), "armenian" => ("Армянская", "Armenian"),
+            "bengali" => ("Бенгальская", "Bengali"), "brahmi" => ("Брахми", "Brahmi"), "braille" => ("Брайль", "Braille"),
+            "chinese-traditional" => ("Китайская традиционная", "Traditional Chinese"), "cypro-minoan" => ("Кипро-минойская", "Cypro-Minoan"),
+            "cyrillic" => ("Кириллица", "Cyrillic"), "cyrillic-ext" => ("Кириллица расширенная", "Cyrillic extended"),
+            "devanagari" => ("Деванагари", "Devanagari"), "emoji" => ("Эмодзи", "Emoji"), "georgian" => ("Грузинская", "Georgian"),
+            "greek" => ("Греческая", "Greek"), "greek-ext" => ("Греческая расширенная", "Greek extended"),
+            "gujarati" => ("Гуджарати", "Gujarati"), "hebrew" => ("Иврит", "Hebrew"), "japanese" => ("Японская", "Japanese"),
+            "khmer" => ("Кхмерская", "Khmer"), "korean" => ("Корейская", "Korean"), "lao" => ("Лаосская", "Lao"),
+            "latin" => ("Латиница", "Latin"), "latin-ext" => ("Латиница расширенная", "Latin extended"), "lisu" => ("Лису", "Lisu"),
+            "manichaean" => ("Манихейская", "Manichaean"), "math" => ("Математические знаки", "Mathematics"),
+            "mayan-numerals" => ("Цифры майя", "Mayan numerals"), "menu" => ("Меню", "Menu"), "nushu" => ("Нюйшу", "Nushu"),
+            "osage" => ("Осейдж", "Osage"), "sharada" => ("Шарада", "Sharada"), "symbols" => ("Символы", "Symbols"),
+            "symbols2" => ("Символы 2", "Symbols 2"), "tangsa" => ("Тангса", "Tangsa"), "tangut" => ("Тангутская", "Tangut"),
+            "telugu" => ("Телугу", "Telugu"), "thai" => ("Тайская", "Thai"), "tibetan" => ("Тибетская", "Tibetan"),
+            "vietnamese" => ("Вьетнамская", "Vietnamese"), "wancho" => ("Ванчо", "Wancho"), _ => (key, key)
+        };
+        return Tr(names.Item1, names.Item2);
+    }
     private string Tr(string ru, string en) => language == "en" ? en : ru;
 }

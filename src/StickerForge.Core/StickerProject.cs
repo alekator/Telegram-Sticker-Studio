@@ -16,6 +16,50 @@ public sealed class StickerItem
 }
 
 public enum TextLayerAlignment { Left, Center, Right }
+public enum TextCase { Original, Upper, Lower }
+public enum TextGradientKind { Linear, Radial, Angular }
+public enum TextOutlinePlacement { Outside, Center, Inside }
+
+public sealed class TextGradientStop
+{
+    public string Color { get; set; } = "#FFFFFFFF";
+    public double Position { get; set; }
+}
+
+public sealed class TextGradient
+{
+    public bool Enabled { get; set; }
+    public TextGradientKind Kind { get; set; }
+    public double Angle { get; set; }
+    public List<TextGradientStop> Stops { get; set; } = [new(), new() { Color = "#FF078BFA", Position = 1 }];
+}
+
+public sealed class TextGlow
+{
+    public bool Enabled { get; set; }
+    public string Color { get; set; } = "#FF078BFA";
+    public double Opacity { get; set; } = .8;
+    public double Radius { get; set; } = 8;
+}
+
+public sealed class TextOutline
+{
+    public bool Enabled { get; set; }
+    public string Color { get; set; } = "#FF000000";
+    public double Width { get; set; } = 4;
+    public double Opacity { get; set; } = 1;
+    public TextOutlinePlacement Placement { get; set; }
+}
+
+public sealed class TextShadow
+{
+    public bool Enabled { get; set; }
+    public string Color { get; set; } = "#FF000000";
+    public double Opacity { get; set; } = .75;
+    public double OffsetX { get; set; } = 4;
+    public double OffsetY { get; set; } = 4;
+    public double Blur { get; set; } = 4;
+}
 
 /// <summary>A text overlay in the coordinate space of the final 512-pixel sticker.</summary>
 public sealed class TextLayer : System.ComponentModel.INotifyPropertyChanged
@@ -40,6 +84,16 @@ public sealed class TextLayer : System.ComponentModel.INotifyPropertyChanged
     public TextLayerAlignment Alignment { get; set; } = TextLayerAlignment.Center;
     public double LineSpacing { get; set; } = 1;
     public double LetterSpacing { get; set; }
+    public bool Underline { get; set; }
+    public bool Strikethrough { get; set; }
+    public TextCase Case { get; set; }
+    public double StretchX { get; set; } = 1;
+    public double StretchY { get; set; } = 1;
+    public double Skew { get; set; }
+    public List<TextOutline> Outlines { get; set; } = [];
+    public TextShadow Shadow { get; set; } = new();
+    public TextGlow Glow { get; set; } = new();
+    public TextGradient Gradient { get; set; } = new();
     public bool IsVisible { get; set; } = true;
     public bool IsLocked { get; set; }
 }

@@ -52,6 +52,10 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? importing;
     private long previewGeneration;
     private Bitmap? previewBitmap;
+    private byte[]? previewSampleEncoded;
+    private byte[]? previewSampleRgba;
+    private int previewSampleWidth, previewSampleHeight;
+    private Action<string>? pendingColorSample;
     private readonly Button gifPlay = new() { Content = "Воспроизвести", IsVisible = false };
     private CancellationTokenSource? gifPlayback;
     private string? gifPath;
@@ -193,7 +197,7 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
         DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
         DockPanel.SetDock(selectionCount, Dock.Top); left.Children.Add(selectionCount);
-        gallery.SelectionChanged += async (_, _) => { if (!refreshing) { UpdateSelection(); await SelectAsync(); } };
+        gallery.SelectionChanged += async (_, _) => { if (!refreshing) { pendingColorSample = null; UpdateSelection(); await SelectAsync(); } };
         gallery.AddHandler(InputElement.PointerPressedEvent, OnGalleryPointerPressed, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerMovedEvent, StartGalleryDrag, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerReleasedEvent, (_, _) => { dragPress = null; pressedSelection = null; }, RoutingStrategies.Tunnel, true);
@@ -232,6 +236,29 @@ public sealed class MainWindow : Window
         gallerySplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(gallerySplitter, "Изменить ширину галереи"); Grid.SetColumn(gallerySplitter, 1); columns.Children.Add(gallerySplitter);
         var layers = new Grid { Width = 512, Height = 512, ClipToBounds = true };
+        layers.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            if (pendingColorSample is null || !e.GetCurrentPoint(layers).Properties.IsLeftButtonPressed) return;
+            var point = e.GetPosition(layers);
+            if (point.X < 0 || point.Y < 0 || point.X >= 512 || point.Y >= 512) return;
+            SKColor? picked = null;
+            if (previewSampleRgba is { } rgba && previewSampleWidth > 0 && previewSampleHeight > 0)
+            {
+                var x = Math.Clamp((int)(point.X * previewSampleWidth / 512), 0, previewSampleWidth - 1);
+                var y = Math.Clamp((int)(point.Y * previewSampleHeight / 512), 0, previewSampleHeight - 1);
+                var offset = (y * previewSampleWidth + x) * 4;
+                if (offset + 3 < rgba.Length) picked = new SKColor(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]);
+            }
+            else if (previewSampleEncoded is { } encoded)
+            {
+                using var pixels = SKBitmap.Decode(encoded);
+                if (pixels is not null) picked = pixels.GetPixel(Math.Clamp((int)(point.X * pixels.Width / 512), 0, pixels.Width - 1), Math.Clamp((int)(point.Y * pixels.Height / 512), 0, pixels.Height - 1));
+            }
+            var callback = pendingColorSample; pendingColorSample = null;
+            if (picked is { } c) callback($"#{c.Alpha:X2}{c.Red:X2}{c.Green:X2}{c.Blue:X2}");
+            status.Text = picked is null ? Tr("Не удалось получить цвет кадра.") : Tr("Цвет выбран.");
+            e.Handled = true;
+        }, RoutingStrategies.Tunnel, true);
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
         layers.Children.Add(textOverlay);
@@ -393,6 +420,7 @@ public sealed class MainWindow : Window
             }
         };
         textEditor = new TextEditorPanel(studioTheme, () => { MarkDirty(); textOverlay.Refresh(); }, () => textOverlay.SetSelected(textEditor?.Selected), fontPreferencesStore);
+        textEditor.SampleCanvasColor = callback => { if (preview.Source is null) return; pendingColorSample = callback; status.Text = Tr("Нажмите на изображение, чтобы выбрать цвет."); };
         textOverlay.RenderingFailed = reason => status.Text = preferences.Language == "en" ? $"Font unavailable: {reason}" : $"Шрифт недоступен: {reason}";
         textOverlay.Changed = () => { MarkDirty(); textEditor.RefreshFields(); };
         textOverlay.SelectionChanged = layer => textEditor.Select(layer);
@@ -1140,9 +1168,7 @@ public sealed class MainWindow : Window
                 : info.FfmpegStill ? await ffmpeg.ReadFrameAsync(item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (previewVideo is null) bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
             if (generation != previewGeneration) return;
-            using var stream = new MemoryStream(bytes);
-            var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{SourceFormat(info, item.SourcePath)} · {info.Width} × {info.Height}\n{(preferences.Language == "en" ? "Ready to export" : "Готов к подготовке")}";
             if (previewVideo is { } video)
             {
@@ -1290,8 +1316,7 @@ public sealed class MainWindow : Window
             var input = info.FfmpegStill ? await ffmpeg.ReadFrameAsync(entry.Item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(entry.Item.SourcePath));
             var bytes = await Task.Run(() => RenderPreview(input, snapshot));
             if (generation != previewGeneration) return;
-            using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { status.Text = preferences.Language == "en" ? "Could not display the preview." : "Не удалось показать предпросмотр."; }
     }
@@ -1312,6 +1337,7 @@ public sealed class MainWindow : Window
     {
         using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
         preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+        previewSampleEncoded = bytes; previewSampleRgba = null;
     }
     private void UpdateVideoTime(double seconds)
     {
@@ -1359,6 +1385,7 @@ public sealed class MainWindow : Window
                     var bitmap = new WriteableBitmap(new PixelSize(frame.Width, frame.Height), new Vector(96, 96), PixelFormat.Rgba8888, AlphaFormat.Unpremul);
                     using (var locked = bitmap.Lock()) for (var y = 0; y < frame.Height; y++) Marshal.Copy(frame.Rgba, y * frame.Width * 4, IntPtr.Add(locked.Address, y * locked.RowBytes), frame.Width * 4);
                     preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+                    previewSampleRgba = frame.Rgba; previewSampleWidth = frame.Width; previewSampleHeight = frame.Height; previewSampleEncoded = null;
                     updatingSeek = true; videoSeek.Value = Math.Min(frame.Seconds, videoSeek.Maximum); updatingSeek = false;
                     UpdateVideoTime(frame.Seconds);
                 }
@@ -1387,9 +1414,7 @@ public sealed class MainWindow : Window
             if (videoMetadata is null) return;
             var bytes = await ffmpeg.ReadTransformedFrameAsync(path, videoMetadata, seconds, transform, source.Token);
             if (generation != previewGeneration || videoPlayback is not null) return;
-            using var stream = new MemoryStream(bytes);
-            var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
@@ -1470,6 +1495,7 @@ public sealed class MainWindow : Window
     }
     private async void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && pendingColorSample is not null) { pendingColorSample = null; status.Text = Tr("Выбор цвета отменён."); e.Handled = true; return; }
         if (e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<TextBox>().Any()) return;
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {

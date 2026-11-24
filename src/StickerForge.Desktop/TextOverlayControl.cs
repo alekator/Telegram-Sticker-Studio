@@ -115,10 +115,13 @@ internal sealed class TextOverlayControl : Control
     {
         using var typeface = BundledFontCatalog.Typeface(layer);
         using var font = new SKFont(typeface, (float)Math.Clamp(layer.FontSize, 1, 512));
-        var lines = (layer.Text ?? "").Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var width = Math.Max(24, lines.Max(line => font.MeasureText(line) + Math.Max(0, line.Length - 1) * layer.LetterSpacing)) * layer.Scale;
-        var height = Math.Max(24, (font.Metrics.Descent - font.Metrics.Ascent) * (1 + (lines.Length - 1) * layer.LineSpacing)) * layer.Scale;
+        var content = layer.Text ?? "";
+        content = layer.Case switch { TextCase.Upper => content.ToUpperInvariant(), TextCase.Lower => content.ToLowerInvariant(), _ => content };
+        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var width = Math.Max(24, lines.Max(line => font.MeasureText(line) + Math.Max(0, line.Length - 1) * layer.LetterSpacing)) * layer.Scale * Math.Clamp(layer.StretchX, .1, 10);
+        var height = Math.Max(24, (font.Metrics.Descent - font.Metrics.Ascent) * (1 + (lines.Length - 1) * layer.LineSpacing)) * layer.Scale * Math.Clamp(layer.StretchY, .1, 10);
         var x = layer.Alignment switch { TextLayerAlignment.Left => 0, TextLayerAlignment.Right => -width, _ => -width / 2 };
-        return new Rect(x, -height / 2, width, height);
+        var shear = Math.Abs(Math.Clamp(layer.Skew, -2, 2)) * height / 2;
+        return new Rect(x - shear, -height / 2, width + shear * 2, height);
     }
 }

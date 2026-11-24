@@ -6,6 +6,44 @@ namespace StickerForge.Tests;
 
 public sealed class StickerPackExporterTests : IDisposable
 {
+    [Fact]
+    public void GradientAndGlowChangeTheSharedTextOverlay()
+    {
+        var layer = new TextLayer { Text = "STICKER", FontSize = 72, Color = "#FFFFFFFF" };
+        using var plainImage = TextLayerRenderer.RenderOverlay([layer]);
+        using var plain = SKBitmap.FromImage(plainImage);
+        layer.Gradient.Enabled = true;
+        layer.Gradient.Stops = [new() { Color = "#FFFF0000", Position = 0 }, new() { Color = "#FF0000FF", Position = 1 }];
+        layer.Glow = new() { Enabled = true, Color = "#FF00FF00", Radius = 6, Opacity = 1 };
+        using var effectImage = TextLayerRenderer.RenderOverlay([layer]);
+        using var effected = SKBitmap.FromImage(effectImage);
+        var colored = 0; var glow = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
+        {
+            var before = plain.GetPixel(x, y); var after = effected.GetPixel(x, y);
+            if (before.Alpha > 200 && after.Alpha > 200 && (after.Red < 200 || after.Blue < 200)) colored++;
+            if (before.Alpha == 0 && after.Alpha > 0 && after.Green > after.Red && after.Green > after.Blue) glow++;
+        }
+        Assert.True(colored > 20); Assert.True(glow > 20);
+        Assert.Equal("STICKER", layer.Text);
+    }
+    [Theory]
+    [InlineData(TextOutlinePlacement.Outside)]
+    [InlineData(TextOutlinePlacement.Center)]
+    [InlineData(TextOutlinePlacement.Inside)]
+    public void OutlinePlacementsRenderWithAlpha(TextOutlinePlacement placement)
+    {
+        var layer = new TextLayer { Text = "TEXT", FontSize = 90, Outlines = [new() { Enabled = true, Color = "#FFFF0000", Width = 6, Placement = placement }] };
+        using var image = TextLayerRenderer.RenderOverlay([layer]); using var bitmap = SKBitmap.FromImage(image);
+        var red = 0; var transparent = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            if (pixel.Alpha > 128 && pixel.Red > 200 && pixel.Green < 80) red++;
+            if (pixel.Alpha == 0) transparent++;
+        }
+        Assert.True(red > 10); Assert.True(transparent > 1000);
+    }
     [Theory]
     [InlineData("with-text.png", SKEncodedImageFormat.Png)]
     [InlineData("with-text.jpg", SKEncodedImageFormat.Jpeg)]
@@ -13,7 +51,7 @@ public sealed class StickerPackExporterTests : IDisposable
     {
         var path = Image(filename, format);
         var transform = new TransformSettings { Rotation = -35, FlipHorizontal = true, Scale = .8 };
-        var layers = new List<TextLayer> { new() { Text = "Привет\nWorld שלום 👩‍💻", X = 210, Y = 80, FontSize = 50, Color = "#FFFFFFFF" }, new() { Text = "hidden", IsVisible = false } };
+        var layers = new List<TextLayer> { new() { Text = "Привет\nWorld שלום 👩‍💻", X = 210, Y = 80, FontSize = 50, Color = "#FFFFFFFF", Underline = true, Case = TextCase.Upper, Outlines = [new() { Enabled = true, Color = "#FF0044AA", Width = 3 }], Shadow = new() { Enabled = true, OffsetX = 5, Blur = 2 } }, new() { Text = "hidden", IsVisible = false } };
         var bundled = BundledFontCatalog.Load()?.Families.FirstOrDefault(family => family.Id == "roboto");
         if (bundled is not null) { layers[0].FontFamily = bundled.Name; layers[0].FontAsset = bundled.Id + "/" + bundled.Fonts[0].File; }
         using var image = SKImage.FromEncodedData(path); using var preview = StickerPackExporter.Render(image, transform, layers); using var expected = SKBitmap.FromImage(preview);
