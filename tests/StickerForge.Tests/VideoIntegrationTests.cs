@@ -16,6 +16,75 @@ public sealed class FfmpegIntegrationFactAttribute : FactAttribute
 
 public sealed class VideoIntegrationTests
 {
+    [FfmpegIntegrationFact]
+    public async Task CurvedStyledTextMatchesPreviewOnGifAndVideoFrames()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "stickerforge-effects-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var (name, codec) in new[] { ("styled.mp4", "mpeg4"), ("styled.gif", "gif") })
+            {
+                var path = Path.Combine(dir, name);
+                await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=96x48:r=10", "-t", "1", "-c:v", codec, "-y", path);
+                var layer = new TextLayer { Text = "Effects", FontSize = 48, X = 256, Y = 65, Curvature = 30,
+                    Gradient = new() { Enabled = true, Stops = [new() { Color = "#FFFFDD00" }, new() { Color = "#FF0088FF", Position = 1 }] },
+                    Glow = new() { Enabled = true, Color = "#FF00DDFF", Radius = 3 }, Outlines = [new() { Enabled = true, Width = 2, Color = "#FF000000" }],
+                    Background = new() { Enabled = true, Color = "#CC221144", Radius = 8 },
+                    RasterEffects = new() { MetallicEnabled = true, MetallicStrength = .35, Emboss = new() { Enabled = true, Depth = 2, Strength = .4 } } };
+                using var previewImage = TextLayerRenderer.RenderOverlay([layer]); using var preview = SKBitmap.FromImage(previewImage);
+                var report = await new StickerPackExporter(new FfmpegService()).ExportAsync([new StickerItem { SourcePath = path, TextLayers = [layer] }], dir, name + "-styled");
+                Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors)); Assert.Equal(1, report.Exported);
+                foreach (var time in new[] { 0d, .5d })
+                {
+                    var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                    foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-ss", time.ToString(System.Globalization.CultureInfo.InvariantCulture), "-i", Path.Combine(report.Directory, "001.webm"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
+                    using var process = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = process.StandardError.ReadToEndAsync();
+                    await process.StandardOutput.BaseStream.CopyToAsync(bytes); await process.WaitForExitAsync(); Assert.True(process.ExitCode == 0, await errors);
+                    using var actual = SKBitmap.Decode(bytes.ToArray());
+                    var checkedPixels = 0; var difference = 0L;
+                    for (var y = 0; y < 120; y += 2) for (var x = 0; x < 512; x += 2)
+                    {
+                        var p = preview.GetPixel(x, y); if (p.Alpha < 240) continue;
+                        var a = actual.GetPixel(x, y); checkedPixels++;
+                        difference += Math.Abs(p.Red - a.Red) + Math.Abs(p.Green - a.Green) + Math.Abs(p.Blue - a.Blue);
+                    }
+                    Assert.True(checkedPixels > 20); Assert.True((double)difference / checkedPixels / 3 < 45, $"Preview differs from {name} at {time}s.");
+                }
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+    [FfmpegIntegrationFact]
+    public async Task TextIsCompositedOnEveryAnimatedFrame()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "stickerforge-text-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var (name, codec) in new[] { ("source.mp4", "mpeg4"), ("source.gif", "gif") })
+            {
+                var path = Path.Combine(dir, name);
+                await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=96x48:r=10", "-t", "1", "-c:v", codec, "-y", path);
+                var layer = new TextLayer { Text = "Привет!", FontSize = 54, X = 256, Y = 50 };
+                var bundled = BundledFontCatalog.Load()?.Families.FirstOrDefault(family => family.Id == "roboto");
+                if (bundled is not null) { layer.FontFamily = bundled.Name; layer.FontAsset = bundled.Id + "/" + bundled.Fonts[0].File; }
+                var report = await new StickerPackExporter(new FfmpegService()).ExportAsync([new StickerItem { SourcePath = path, TextLayers = [layer] }], dir, name + "-out");
+                Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors));
+                foreach (var time in new[] { 0d, .5d })
+                {
+                    var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                    foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-ss", time.ToString(System.Globalization.CultureInfo.InvariantCulture), "-i", Path.Combine(report.Directory, "001.webm"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
+                    using var process = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = process.StandardError.ReadToEndAsync();
+                    await process.StandardOutput.BaseStream.CopyToAsync(bytes); await process.WaitForExitAsync(); Assert.True(process.ExitCode == 0, await errors);
+                    using var frame = SKBitmap.Decode(bytes.ToArray());
+                    var count = 0;
+                    for (var y = 10; y < 95; y++) for (var x = 40; x < 470; x++) if (frame.GetPixel(x, y).Alpha > 128) count++;
+                    Assert.True(count > 50, $"Text missing from {name} at {time}s");
+                }
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     private static async Task CheckReflectionsAsync(string path, string directory, string name)
     {
         var service = new FfmpegService(); var metadata = await service.ProbeAsync(path);

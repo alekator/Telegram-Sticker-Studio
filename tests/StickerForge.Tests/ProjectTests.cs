@@ -51,13 +51,74 @@ public sealed class ProjectTests : IDisposable
         await File.WriteAllTextAsync(path, """
             {"schemaVersion":1,"name":"old","stickers":[{"id":"11111111-1111-1111-1111-111111111111","sourcePath":"image.png","transform":{"fit":1,"scale":1.5,"offsetX":12,"rotation":90}}]}
             """);
-        var transform = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers).Transform;
+        var item = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers);
+        Assert.Empty(item.TextLayers);
+        var transform = item.Transform;
         Assert.Equal(FitMode.Fill, transform.Fit); Assert.Equal(1.5, transform.Scale); Assert.Equal(12, transform.OffsetX); Assert.Equal(90, transform.Rotation);
         Assert.False(transform.FlipHorizontal); Assert.False(transform.FlipVertical);
     }
 
     [Fact]
     public void NewProjectIsEmpty() => Assert.Empty(new StickerProject().Stickers);
+
+    [Fact]
+    public async Task TextLayersRoundTripIndependentlyAndInOrder()
+    {
+        var path = Path.Combine(directory, "text.json");
+        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", FontAsset = "roboto/Roboto[wdth,wght].ttf", X = 42, Y = 180, Rotation = -25, IsLocked = true, Case = TextCase.Upper, Underline = true, StretchX = 1.4, Outlines = [new() { Enabled = true, Width = 7, Color = "#FF123456" }], Shadow = new() { Enabled = true, OffsetX = 9, Blur = 5 }, Glow = new() { Enabled = true, Radius = 12 }, Gradient = new() { Enabled = true, Kind = TextGradientKind.Angular, Angle = 30, Stops = [new() { Color = "#80FF0000", Position = .25 }, new() { Color = "#FF00FFFF", Position = .8 }] } };
+        var second = new TextLayer { Text = "Second", IsVisible = false, LetterSpacing = 2 };
+        first.Background = new() { Enabled = true, PerLine = true, PaddingX = 12, BorderWidth = 3, Gradient = new() { Enabled = true } };
+        first.Extrusion = new() { Enabled = true, Depth = 15, Angle = 75, Shading = .5 };
+        first.RasterEffects = new() { BlurEnabled = true, BlurRadius = 3, PixelationEnabled = true, PixelSize = 9, ChromaticEnabled = true, ChromaticOffset = 6, MetallicEnabled = true, MetallicStrength = .7, GlossEnabled = true, GlossStrength = .4 };
+        first.Curvature = -75;
+        first.RasterEffects.Emboss = new() { Enabled = true, Depth = 4, Angle = 30, Strength = .8 };
+        first.RasterEffects.Inset = new() { Enabled = true, Depth = 2, Angle = 75, Strength = .3 };
+        var project = new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "one.png"), TextLayers = [first, second] }, new() { SourcePath = Path.Combine(directory, "two.gif") }] };
+        var store = new ProjectStore();
+        await store.SaveAsync(project, path);
+        var loaded = await store.LoadAsync(path);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(project.Stickers[0].TextLayers), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[0].TextLayers));
+        Assert.Empty(loaded.Stickers[1].TextLayers);
+        loaded.Stickers[1].TextLayers.Add(new TextLayer());
+        Assert.Equal(2, loaded.Stickers[0].TextLayers.Count);
+    }
+
+    [Fact]
+    public void TextStylesPersistAndDoNotChangeContentOrGeometry()
+    {
+        var stylePath = Path.Combine(directory, "styles.json");
+        var source = new TextLayer { Text = "source", Color = "#FF00AAFF", Outlines = [new() { Enabled = true, Width = 9 }] };
+        var style = TextStyle.Capture(source, "Custom");
+        var store = new TextStyleStore(stylePath); store.Save([style]);
+        var loaded = Assert.Single(store.Load());
+        var target = new TextLayer { Text = "target", X = 17, Y = 29, Scale = 2, Rotation = -45 };
+        loaded.Apply(target);
+        Assert.Equal("target", target.Text); Assert.Equal(17, target.X); Assert.Equal(29, target.Y);
+        Assert.Equal(2, target.Scale); Assert.Equal(-45, target.Rotation); Assert.Equal("#FF00AAFF", target.Color);
+        Assert.Equal(9, Assert.Single(target.Outlines).Width);
+        target.Outlines[0].Width = 2;
+        Assert.Equal(9, source.Outlines[0].Width); Assert.Equal(9, loaded.Outlines[0].Width);
+        Assert.Contains(TextStylePresets.Create(), preset => preset.Name == "Neon Blue" && preset.Glow.Enabled);
+    }
+
+    [Fact]
+    public void FontFavoritesAndRecentSurviveRestartAndDamagedSettings()
+    {
+        var path = Path.Combine(directory, "font-preferences.json");
+        new FontPreferencesStore(path).Save(new FontPreferences(["roboto", "system:Arial"], ["roboto"]));
+        var loaded = new FontPreferencesStore(path).Load();
+        Assert.Equal(new[] { "roboto", "system:Arial" }, loaded.Favorites); Assert.Equal(new[] { "roboto" }, loaded.Recent);
+        File.WriteAllText(path, "{"); Assert.Empty(new FontPreferencesStore(path).Load().Favorites);
+    }
+
+    [Fact]
+    public void BundledFontPathsRejectTraversalAndMissingFiles()
+    {
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("../Arial.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("roboto/../../Arial.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("roboto/missing.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Typeface(new TextLayer { FontAsset = "missing/missing.ttf" }));
+    }
 
     [Fact]
     public void PanelLayoutRestoresWidthsAndVisibilityAndToleratesDamagedSettings()

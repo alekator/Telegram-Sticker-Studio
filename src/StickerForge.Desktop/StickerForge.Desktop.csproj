@@ -7,4 +7,15 @@
   <ProjectReference Include="../StickerForge.Infrastructure/StickerForge.Infrastructure.csproj" />
   <ProjectReference Include="../StickerForge.Media/StickerForge.Media.csproj" />
 </ItemGroup>
+<!-- A normal build must contain the same verified offline catalog as the ZIP. -->
+<PropertyGroup>
+  <FontPreparationShell Condition="'$(OS)' == 'Windows_NT'">powershell</FontPreparationShell>
+  <FontPreparationShell Condition="'$(OS)' != 'Windows_NT'">pwsh</FontPreparationShell>
+</PropertyGroup>
+<Target Name="PrepareBundledFonts" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(TargetDir)fonts/manifest.json')">
+  <Exec Command="$(FontPreparationShell) -NoProfile -File &quot;$(MSBuildThisFileDirectory)..\..\eng\prepare-fonts.ps1&quot; -OutputDirectory &quot;$(TargetDir)fonts&quot;" />
+</Target>
+<Target Name="PublishBundledFonts" AfterTargets="Publish" Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(PublishDir)fonts/manifest.json')">
+  <Exec Command="$(FontPreparationShell) -NoProfile -File &quot;$(MSBuildThisFileDirectory)..\..\eng\prepare-fonts.ps1&quot; -OutputDirectory &quot;$(PublishDir)fonts&quot;" />
+</Target>
 </Project>

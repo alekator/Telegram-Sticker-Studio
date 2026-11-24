@@ -32,6 +32,10 @@ public sealed class MainWindow : Window
     private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TextBox packName = new() { PlaceholderText = "Название набора", Width = 180 };
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
+    private readonly TextOverlayControl textOverlay = new() { Width = 512, Height = 512, IsHitTestVisible = false };
+    private TextEditorPanel? textEditor;
+    private Control? propertyTabs;
+    private StickerItem? textEditorItem;
     private readonly TextBlock details = new() { Text = "Выберите стикер", TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock status = new() { Text = "Готово" };
     private readonly TextBlock selectionCount = new() { Margin = new Thickness(4, 0, 4, 8), Opacity = .8 };
@@ -48,6 +52,10 @@ public sealed class MainWindow : Window
     private CancellationTokenSource? importing;
     private long previewGeneration;
     private Bitmap? previewBitmap;
+    private byte[]? previewSampleEncoded;
+    private byte[]? previewSampleRgba;
+    private int previewSampleWidth, previewSampleHeight;
+    private Action<string>? pendingColorSample;
     private readonly Button gifPlay = new() { Content = "Воспроизвести", IsVisible = false };
     private CancellationTokenSource? gifPlayback;
     private string? gifPath;
@@ -117,7 +125,7 @@ public sealed class MainWindow : Window
     private ContextMenu? projectMenu;
     private Button? settingsButton;
 
-    public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null)
+    public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null, FontPreferencesStore? fontPreferencesStore = null)
     {
         this.layoutStore = layoutStore ?? new();
         this.preferencesStore = preferencesStore ?? new(); preferences = this.preferencesStore.Load();
@@ -128,6 +136,8 @@ public sealed class MainWindow : Window
         FontSize = 14;
         Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)), new Setter(BackgroundProperty, studioTheme.Surface), new Setter(ForegroundProperty, studioTheme.Text) } });
         Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>().Class("inline-text").Template().OfType<Border>().Name("PART_BorderElement")) { Setters = { new Setter(BackgroundProperty, Brushes.Transparent), new Setter(BorderBrushProperty, Brushes.Transparent), new Setter(BorderThicknessProperty, new Thickness(0)) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>().Class("inline-text").Class(":focus").Template().OfType<Border>().Name("PART_BorderElement")) { Setters = { new Setter(BackgroundProperty, Brushes.Transparent), new Setter(BorderBrushProperty, Brushes.Transparent), new Setter(BorderThicknessProperty, new Thickness(0)) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelToggleHover) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pressed").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelTogglePressed) } });
         Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<RepeatButton>().Name("PART_DecreaseButton").Template().OfType<Border>().Name("TrackBackground")) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderActive) } });
@@ -187,7 +197,7 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(actions, Dock.Top); left.Children.Add(actions);
         DockPanel.SetDock(galleryHint, Dock.Top); left.Children.Add(galleryHint);
         DockPanel.SetDock(selectionCount, Dock.Top); left.Children.Add(selectionCount);
-        gallery.SelectionChanged += async (_, _) => { if (!refreshing) { UpdateSelection(); await SelectAsync(); } };
+        gallery.SelectionChanged += async (_, _) => { if (!refreshing) { pendingColorSample = null; UpdateSelection(); await SelectAsync(); } };
         gallery.AddHandler(InputElement.PointerPressedEvent, OnGalleryPointerPressed, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerMovedEvent, StartGalleryDrag, RoutingStrategies.Tunnel, true);
         gallery.AddHandler(InputElement.PointerReleasedEvent, (_, _) => { dragPress = null; pressedSelection = null; }, RoutingStrategies.Tunnel, true);
@@ -226,8 +236,55 @@ public sealed class MainWindow : Window
         gallerySplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(gallerySplitter, "Изменить ширину галереи"); Grid.SetColumn(gallerySplitter, 1); columns.Children.Add(gallerySplitter);
         var layers = new Grid { Width = 512, Height = 512, ClipToBounds = true };
+        layers.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            if (pendingColorSample is null || !e.GetCurrentPoint(layers).Properties.IsLeftButtonPressed) return;
+            var point = e.GetPosition(layers);
+            if (point.X < 0 || point.Y < 0 || point.X >= 512 || point.Y >= 512) return;
+            SKColor? picked = null;
+            if (previewSampleRgba is { } rgba && previewSampleWidth > 0 && previewSampleHeight > 0)
+            {
+                var x = Math.Clamp((int)(point.X * previewSampleWidth / 512), 0, previewSampleWidth - 1);
+                var y = Math.Clamp((int)(point.Y * previewSampleHeight / 512), 0, previewSampleHeight - 1);
+                var offset = (y * previewSampleWidth + x) * 4;
+                if (offset + 3 < rgba.Length) picked = new SKColor(rgba[offset], rgba[offset + 1], rgba[offset + 2], rgba[offset + 3]);
+            }
+            else if (previewSampleEncoded is { } encoded)
+            {
+                using var pixels = SKBitmap.Decode(encoded);
+                if (pixels is not null) picked = pixels.GetPixel(Math.Clamp((int)(point.X * pixels.Width / 512), 0, pixels.Width - 1), Math.Clamp((int)(point.Y * pixels.Height / 512), 0, pixels.Height - 1));
+            }
+            var callback = pendingColorSample; pendingColorSample = null;
+            if (picked is { } c) callback($"#{c.Alpha:X2}{c.Red:X2}{c.Green:X2}{c.Blue:X2}");
+            status.Text = picked is null ? Tr("Не удалось получить цвет кадра.") : Tr("Цвет выбран.");
+            e.Handled = true;
+        }, RoutingStrategies.Tunnel, true);
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
+        layers.Children.Add(textOverlay);
+        var inlineText = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, IsVisible = false, Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent, Foreground = Brushes.Transparent, SelectionForegroundBrush = Brushes.Transparent, SelectionBrush = new SolidColorBrush(Color.Parse("#80078BFA")), CaretBrush = studioTheme.Accent, MinHeight = 0, MinWidth = 0 };
+        var inlineFonts = new InlineFontProvider(); Closed += (_, _) => inlineFonts.Dispose();
+        inlineText.Classes.Add("inline-text");
+        var inlineCanvas = new Canvas { Width = 512, Height = 512 }; inlineCanvas.Children.Add(inlineText); layers.Children.Add(inlineCanvas);
+        void PositionInline(TextLayer layer)
+        {
+            var bounds = TextOverlayControl.LocalBounds(layer);
+            inlineText.Width = Math.Max(32, bounds.Width + 4); inlineText.Height = Math.Max(30, bounds.Height + 4);
+            Canvas.SetLeft(inlineText, layer.X + bounds.X - 2); Canvas.SetTop(inlineText, layer.Y + bounds.Y - 2);
+            inlineText.RenderTransformOrigin = new RelativePoint(0, 0, RelativeUnit.Absolute);
+            inlineText.RenderTransform = new RotateTransform(layer.Rotation, -bounds.X + 2, -bounds.Y + 2);
+            inlineText.FontFamily = inlineFonts.Resolve(layer); inlineText.FontSize = Math.Clamp(layer.FontSize * layer.Scale, 1, 1024);
+            inlineText.FontWeight = layer.Bold ? FontWeight.Bold : FontWeight.Normal;
+            inlineText.FontStyle = layer.Italic ? FontStyle.Italic : FontStyle.Normal;
+            inlineText.TextAlignment = layer.Alignment switch { TextLayerAlignment.Left => TextAlignment.Left, TextLayerAlignment.Right => TextAlignment.Right, _ => TextAlignment.Center };
+        }
+        inlineText.TextChanged += (_, _) =>
+        {
+            if (inlineText.IsVisible && textEditor?.Selected is { IsLocked: false } layer)
+            { layer.Text = inlineText.Text ?? ""; MarkDirty(); textOverlay.Refresh(); PositionInline(layer); textEditor.RefreshFields(); }
+        };
+        inlineText.LostFocus += (_, _) => inlineText.IsVisible = false;
+        inlineText.KeyDown += (_, e) => { if (e.Key == Key.Escape) { inlineText.IsVisible = false; textOverlay.Focus(); e.Handled = true; } };
         layers.Children.Add(new Border { BorderBrush = StudioTheme.StickerBoundaryOuter, BorderThickness = new Thickness(2), IsHitTestVisible = false,
             Child = new Border { BorderBrush = StudioTheme.StickerBoundaryInner, BorderThickness = new Thickness(1), IsHitTestVisible = false } });
         var stickerBoundary = new Border { Width = 512, Height = 512, Child = layers };
@@ -286,7 +343,6 @@ public sealed class MainWindow : Window
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
         var properties = new StackPanel { Spacing = 8 };
-        editingProperties = properties;
         properties.Children.Add(new TextBlock { Text = "Редактирование", FontSize = 17, FontWeight = FontWeight.SemiBold });
         properties.Children.Add(details);
         properties.Children.Add(new TextBlock { Text = "Режим подгонки", FontWeight = FontWeight.SemiBold });
@@ -363,8 +419,44 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties); propertyContent.Children.Add(properties);
-        var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = new ScrollViewer { Content = propertyContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
+        textEditor = new TextEditorPanel(studioTheme, () => { MarkDirty(); textOverlay.Refresh(); }, () => textOverlay.SetSelected(textEditor?.Selected), fontPreferencesStore);
+        textEditor.SampleCanvasColor = callback => { if (preview.Source is null) return; pendingColorSample = callback; status.Text = Tr("Нажмите на изображение, чтобы выбрать цвет."); };
+        textOverlay.RenderingFailed = reason => status.Text = preferences.Language == "en" ? $"Font unavailable: {reason}" : $"Шрифт недоступен: {reason}";
+        textOverlay.Changed = () => { MarkDirty(); textEditor.RefreshFields(); };
+        textOverlay.SelectionChanged = layer => textEditor.Select(layer);
+        void BeginInlineEdit()
+        {
+            if (textEditor.Selected is not { IsLocked: false } layer) return;
+            inlineText.Text = layer.Text;
+            try { PositionInline(layer); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { status.Text = ex.Message; return; }
+            inlineText.IsVisible = true; inlineText.Focus(); inlineText.SelectAll();
+        }
+        textOverlay.EditRequested = BeginInlineEdit;
+        textEditor.LayerAdded = BeginInlineEdit;
+        var imageTab = new Button { Content = "Изображение" };
+        var textTab = new Button { Content = "Текст" };
+        var tabs = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 6 };
+        propertyTabs = tabs;
+        imageTab.HorizontalAlignment = HorizontalAlignment.Stretch; textTab.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(textTab, 1); tabs.Children.Add(imageTab); tabs.Children.Add(textTab);
+        editingProperties = new StackPanel { Spacing = 8 }; editingProperties.Children.Add(properties); editingProperties.Children.Add(textEditor);
+        void SetTextMode(bool active)
+        {
+            properties.IsVisible = !active; textEditor.IsVisible = active;
+            imageTab.Background = active ? studioTheme.Surface : studioTheme.Accent;
+            textTab.Background = active ? studioTheme.Accent : studioTheme.Surface;
+            textOverlay.Editing = active; textOverlay.IsHitTestVisible = active; textOverlay.InvalidateVisual();
+        }
+        imageTab.Click += (_, _) => SetTextMode(false);
+        textTab.Click += (_, _) => SetTextMode(true);
+        SetTextMode(false);
+        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties);
+        var propertyDock = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(tabs, Dock.Top); tabs.Margin = new Thickness(0, 0, 0, 8); propertyDock.Children.Add(tabs);
+        propertyDock.Children.Add(new ScrollViewer { Content = editingProperties, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        propertyContent.Children.Add(propertyDock);
+        var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = propertyContent };
         propertiesSide = propertiesPanel;
         Grid.SetColumn(propertiesPanel, 4); columns.Children.Add(propertiesPanel);
         galleryVisibilityButton = PanelVisibilityButton("GalleryVisibility", ToggleGallery);
@@ -408,6 +500,7 @@ public sealed class MainWindow : Window
         if (Content is Control root) StudioLocalization.Apply(root, preferences.Language);
         if (galleryMenu is not null) StudioLocalization.Apply(galleryMenu, preferences.Language);
         if (projectMenu is not null) StudioLocalization.Apply(projectMenu, preferences.Language);
+        textEditor?.SetLanguage(preferences.Language);
         UpdatePanelButtons();
         foreach (var card in gallery.Items.OfType<ListBoxItem>()) StudioLocalization.Apply(card, preferences.Language);
         packName.PlaceholderText = Tr("Название набора");
@@ -728,7 +821,11 @@ public sealed class MainWindow : Window
             var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = preferences.Language == "en" ? $"Choose a folder for {project.Stickers.Count} stickers" : $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
             var path = folders.FirstOrDefault()?.TryGetLocalPath();
             if (path is null) return;
-            var sources = project.Stickers.ToArray();
+            var sources = project.Stickers.Select(item => new StickerItem
+            {
+                Id = item.Id, SourcePath = item.SourcePath, Transform = CopyTransform(item.Transform),
+                TextLayers = System.Text.Json.JsonSerializer.Deserialize<List<TextLayer>>(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(item.TextLayers)) ?? []
+            }).ToArray();
             var name = project.Name;
             var progressText = new TextBlock { Text = Tr("Подготовка файлов для Telegram"), Foreground = studioTheme.Secondary, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center };
             var progressBar = new ProgressBar { Minimum = 0, Maximum = 1, Height = 10, HorizontalAlignment = HorizontalAlignment.Stretch, Foreground = studioTheme.Accent };
@@ -922,7 +1019,16 @@ public sealed class MainWindow : Window
         selectionCount.Text = preferences.Language == "en" ? (count > 0 ? $"Selected: {count} of {project.Stickers.Count}" : $"Files: {project.Stickers.Count}") : (count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}");
         if (exportButton is not null) { exportButton.Content = preferences.Language == "en" ? $"Export {project.Stickers.Count} stickers" : $"Экспортировать {project.Stickers.Count} стикеров"; exportButton.IsEnabled = project.Stickers.Count > 0 && !busy; }
         var hasSelection = SelectedEntry() is not null;
+        var selectedItem = SelectedEntry()?.Item;
+        if (!ReferenceEquals(textEditorItem, selectedItem))
+        {
+            textEditorItem = selectedItem;
+            textEditor?.SetItem(selectedItem);
+            textOverlay.SetItem(selectedItem);
+            textOverlay.SetSelected(textEditor?.Selected);
+        }
         if (editingProperties is not null) editingProperties.IsVisible = hasSelection;
+        if (propertyTabs is not null) propertyTabs.IsVisible = hasSelection;
         emptyProperties.IsVisible = !hasSelection; emptyCanvas.IsVisible = !hasSelection;
         if (previewViewbox is not null) previewViewbox.IsVisible = hasSelection;
         if (applySelectedButton is not null) applySelectedButton.IsEnabled = count > 1;
@@ -1062,9 +1168,7 @@ public sealed class MainWindow : Window
                 : info.FfmpegStill ? await ffmpeg.ReadFrameAsync(item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(item.SourcePath));
             if (previewVideo is null) bytes = await Task.Run(() => RenderPreview(bytes, CopyTransform(item.Transform)));
             if (generation != previewGeneration) return;
-            using var stream = new MemoryStream(bytes);
-            var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
             details.Text = $"{Path.GetFileName(item.SourcePath)}\n{SourceFormat(info, item.SourcePath)} · {info.Width} × {info.Height}\n{(preferences.Language == "en" ? "Ready to export" : "Готов к подготовке")}";
             if (previewVideo is { } video)
             {
@@ -1212,8 +1316,7 @@ public sealed class MainWindow : Window
             var input = info.FfmpegStill ? await ffmpeg.ReadFrameAsync(entry.Item.SourcePath, 0) : await Task.Run(() => File.ReadAllBytes(entry.Item.SourcePath));
             var bytes = await Task.Run(() => RenderPreview(input, snapshot));
             if (generation != previewGeneration) return;
-            using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException) { status.Text = preferences.Language == "en" ? "Could not display the preview." : "Не удалось показать предпросмотр."; }
     }
@@ -1234,6 +1337,7 @@ public sealed class MainWindow : Window
     {
         using var stream = new MemoryStream(bytes); var bitmap = new Bitmap(stream);
         preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+        previewSampleEncoded = bytes; previewSampleRgba = null;
     }
     private void UpdateVideoTime(double seconds)
     {
@@ -1281,6 +1385,7 @@ public sealed class MainWindow : Window
                     var bitmap = new WriteableBitmap(new PixelSize(frame.Width, frame.Height), new Vector(96, 96), PixelFormat.Rgba8888, AlphaFormat.Unpremul);
                     using (var locked = bitmap.Lock()) for (var y = 0; y < frame.Height; y++) Marshal.Copy(frame.Rgba, y * frame.Width * 4, IntPtr.Add(locked.Address, y * locked.RowBytes), frame.Width * 4);
                     preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+                    previewSampleRgba = frame.Rgba; previewSampleWidth = frame.Width; previewSampleHeight = frame.Height; previewSampleEncoded = null;
                     updatingSeek = true; videoSeek.Value = Math.Min(frame.Seconds, videoSeek.Maximum); updatingSeek = false;
                     UpdateVideoTime(frame.Seconds);
                 }
@@ -1309,9 +1414,7 @@ public sealed class MainWindow : Window
             if (videoMetadata is null) return;
             var bytes = await ffmpeg.ReadTransformedFrameAsync(path, videoMetadata, seconds, transform, source.Token);
             if (generation != previewGeneration || videoPlayback is not null) return;
-            using var stream = new MemoryStream(bytes);
-            var bitmap = new Bitmap(stream);
-            preview.Source = bitmap; previewBitmap?.Dispose(); previewBitmap = bitmap;
+            SetPreview(bytes);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or TimeoutException or System.ComponentModel.Win32Exception)
@@ -1392,6 +1495,8 @@ public sealed class MainWindow : Window
     }
     private async void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && pendingColorSample is not null) { pendingColorSample = null; status.Text = Tr("Выбор цвета отменён."); e.Handled = true; return; }
+        if (e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<TextBox>().Any()) return;
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             if (e.Key == Key.N) await NewAsync();
