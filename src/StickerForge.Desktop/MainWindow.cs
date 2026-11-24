@@ -34,6 +34,7 @@ public sealed class MainWindow : Window
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
     private readonly TextOverlayControl textOverlay = new() { Width = 512, Height = 512, IsHitTestVisible = false };
     private TextEditorPanel? textEditor;
+    private Control? propertyTabs;
     private StickerItem? textEditorItem;
     private readonly TextBlock details = new() { Text = "Выберите стикер", TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock status = new() { Text = "Готово" };
@@ -120,7 +121,7 @@ public sealed class MainWindow : Window
     private ContextMenu? projectMenu;
     private Button? settingsButton;
 
-    public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null)
+    public MainWindow(PanelLayoutStore? layoutStore = null, UiPreferencesStore? preferencesStore = null, FontPreferencesStore? fontPreferencesStore = null)
     {
         this.layoutStore = layoutStore ?? new();
         this.preferencesStore = preferencesStore ?? new(); preferences = this.preferencesStore.Load();
@@ -131,6 +132,8 @@ public sealed class MainWindow : Window
         FontSize = 14;
         Styles.Add(new Style(x => x.OfType<Button>()) { Setters = { new Setter(MinHeightProperty, 38d), new Setter(PaddingProperty, new Thickness(12, 6)), new Setter(Avalonia.Controls.Button.CornerRadiusProperty, new CornerRadius(10)), new Setter(BackgroundProperty, studioTheme.Surface), new Setter(ForegroundProperty, studioTheme.Text) } });
         Styles.Add(new Style(x => x.OfType<TextBox>()) { Setters = { new Setter(MinHeightProperty, 34d), new Setter(PaddingProperty, new Thickness(8, 5)), new Setter(BackgroundProperty, studioTheme.Panel), new Setter(BorderBrushProperty, studioTheme.Border), new Setter(ForegroundProperty, studioTheme.Text) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>().Class("inline-text").Template().OfType<Border>().Name("PART_BorderElement")) { Setters = { new Setter(BackgroundProperty, Brushes.Transparent), new Setter(BorderBrushProperty, Brushes.Transparent), new Setter(BorderThicknessProperty, new Thickness(0)) } });
+        Styles.Add(new Style(x => x.OfType<TextBox>().Class("inline-text").Class(":focus").Template().OfType<Border>().Name("PART_BorderElement")) { Setters = { new Setter(BackgroundProperty, Brushes.Transparent), new Setter(BorderBrushProperty, Brushes.Transparent), new Setter(BorderThicknessProperty, new Thickness(0)) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pointerover").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelToggleHover) } });
         Styles.Add(new Style(x => x.OfType<Button>().Class("panel-toggle").Class(":pressed").Template().OfType<ContentPresenter>().Name("PART_ContentPresenter")) { Setters = { new Setter(BackgroundProperty, studioTheme.PanelTogglePressed) } });
         Styles.Add(new Style(x => x.OfType<Slider>().Class("edit-slider").Template().OfType<RepeatButton>().Name("PART_DecreaseButton").Template().OfType<Border>().Name("TrackBackground")) { Setters = { new Setter(BackgroundProperty, studioTheme.SliderActive) } });
@@ -232,14 +235,29 @@ public sealed class MainWindow : Window
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
         layers.Children.Add(textOverlay);
-        var inlineText = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Width = 240, MinHeight = 48, IsVisible = false };
+        var inlineText = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, IsVisible = false, Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent, Foreground = Brushes.Transparent, SelectionForegroundBrush = Brushes.Transparent, SelectionBrush = new SolidColorBrush(Color.Parse("#80078BFA")), CaretBrush = studioTheme.Accent, MinHeight = 0, MinWidth = 0 };
+        var inlineFonts = new InlineFontProvider(); Closed += (_, _) => inlineFonts.Dispose();
+        inlineText.Classes.Add("inline-text");
         var inlineCanvas = new Canvas { Width = 512, Height = 512 }; inlineCanvas.Children.Add(inlineText); layers.Children.Add(inlineCanvas);
+        void PositionInline(TextLayer layer)
+        {
+            var bounds = TextOverlayControl.LocalBounds(layer);
+            inlineText.Width = Math.Max(32, bounds.Width + 4); inlineText.Height = Math.Max(30, bounds.Height + 4);
+            Canvas.SetLeft(inlineText, layer.X + bounds.X - 2); Canvas.SetTop(inlineText, layer.Y + bounds.Y - 2);
+            inlineText.RenderTransformOrigin = new RelativePoint(0, 0, RelativeUnit.Absolute);
+            inlineText.RenderTransform = new RotateTransform(layer.Rotation, -bounds.X + 2, -bounds.Y + 2);
+            inlineText.FontFamily = inlineFonts.Resolve(layer); inlineText.FontSize = Math.Clamp(layer.FontSize * layer.Scale, 1, 1024);
+            inlineText.FontWeight = layer.Bold ? FontWeight.Bold : FontWeight.Normal;
+            inlineText.FontStyle = layer.Italic ? FontStyle.Italic : FontStyle.Normal;
+            inlineText.TextAlignment = layer.Alignment switch { TextLayerAlignment.Left => TextAlignment.Left, TextLayerAlignment.Right => TextAlignment.Right, _ => TextAlignment.Center };
+        }
         inlineText.TextChanged += (_, _) =>
         {
             if (inlineText.IsVisible && textEditor?.Selected is { IsLocked: false } layer)
-            { layer.Text = inlineText.Text ?? ""; MarkDirty(); textOverlay.Refresh(); textEditor.RefreshFields(); }
+            { layer.Text = inlineText.Text ?? ""; MarkDirty(); textOverlay.Refresh(); PositionInline(layer); textEditor.RefreshFields(); }
         };
         inlineText.LostFocus += (_, _) => inlineText.IsVisible = false;
+        inlineText.KeyDown += (_, e) => { if (e.Key == Key.Escape) { inlineText.IsVisible = false; textOverlay.Focus(); e.Handled = true; } };
         layers.Children.Add(new Border { BorderBrush = StudioTheme.StickerBoundaryOuter, BorderThickness = new Thickness(2), IsHitTestVisible = false,
             Child = new Border { BorderBrush = StudioTheme.StickerBoundaryInner, BorderThickness = new Thickness(1), IsHitTestVisible = false } });
         var stickerBoundary = new Border { Width = 512, Height = 512, Child = layers };
@@ -374,23 +392,27 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        textEditor = new TextEditorPanel(studioTheme, () => { MarkDirty(); textOverlay.Refresh(); }, () => textOverlay.SetSelected(textEditor?.Selected));
+        textEditor = new TextEditorPanel(studioTheme, () => { MarkDirty(); textOverlay.Refresh(); }, () => textOverlay.SetSelected(textEditor?.Selected), fontPreferencesStore);
+        textOverlay.RenderingFailed = reason => status.Text = preferences.Language == "en" ? $"Font unavailable: {reason}" : $"Шрифт недоступен: {reason}";
         textOverlay.Changed = () => { MarkDirty(); textEditor.RefreshFields(); };
         textOverlay.SelectionChanged = layer => textEditor.Select(layer);
-        textOverlay.EditRequested = () =>
+        void BeginInlineEdit()
         {
             if (textEditor.Selected is not { IsLocked: false } layer) return;
             inlineText.Text = layer.Text;
-            Canvas.SetLeft(inlineText, Math.Clamp(layer.X - 120, 0, 272));
-            Canvas.SetTop(inlineText, Math.Clamp(layer.Y - 24, 0, 440));
+            try { PositionInline(layer); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { status.Text = ex.Message; return; }
             inlineText.IsVisible = true; inlineText.Focus(); inlineText.SelectAll();
-        };
+        }
+        textOverlay.EditRequested = BeginInlineEdit;
+        textEditor.LayerAdded = BeginInlineEdit;
         var imageTab = new Button { Content = "Изображение" };
         var textTab = new Button { Content = "Текст" };
         var tabs = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 6 };
+        propertyTabs = tabs;
         imageTab.HorizontalAlignment = HorizontalAlignment.Stretch; textTab.HorizontalAlignment = HorizontalAlignment.Stretch;
         Grid.SetColumn(textTab, 1); tabs.Children.Add(imageTab); tabs.Children.Add(textTab);
-        editingProperties = new StackPanel { Spacing = 8 }; editingProperties.Children.Add(tabs); editingProperties.Children.Add(properties); editingProperties.Children.Add(textEditor);
+        editingProperties = new StackPanel { Spacing = 8 }; editingProperties.Children.Add(properties); editingProperties.Children.Add(textEditor);
         void SetTextMode(bool active)
         {
             properties.IsVisible = !active; textEditor.IsVisible = active;
@@ -401,8 +423,12 @@ public sealed class MainWindow : Window
         imageTab.Click += (_, _) => SetTextMode(false);
         textTab.Click += (_, _) => SetTextMode(true);
         SetTextMode(false);
-        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties); propertyContent.Children.Add(editingProperties);
-        var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = new ScrollViewer { Content = propertyContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
+        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties);
+        var propertyDock = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(tabs, Dock.Top); tabs.Margin = new Thickness(0, 0, 0, 8); propertyDock.Children.Add(tabs);
+        propertyDock.Children.Add(new ScrollViewer { Content = editingProperties, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        propertyContent.Children.Add(propertyDock);
+        var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = propertyContent };
         propertiesSide = propertiesPanel;
         Grid.SetColumn(propertiesPanel, 4); columns.Children.Add(propertiesPanel);
         galleryVisibilityButton = PanelVisibilityButton("GalleryVisibility", ToggleGallery);
@@ -974,6 +1000,7 @@ public sealed class MainWindow : Window
             textOverlay.SetSelected(textEditor?.Selected);
         }
         if (editingProperties is not null) editingProperties.IsVisible = hasSelection;
+        if (propertyTabs is not null) propertyTabs.IsVisible = hasSelection;
         emptyProperties.IsVisible = !hasSelection; emptyCanvas.IsVisible = !hasSelection;
         if (previewViewbox is not null) previewViewbox.IsVisible = hasSelection;
         if (applySelectedButton is not null) applySelectedButton.IsEnabled = count > 1;
@@ -1443,6 +1470,7 @@ public sealed class MainWindow : Window
     }
     private async void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<TextBox>().Any()) return;
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             if (e.Key == Key.N) await NewAsync();

@@ -13,7 +13,9 @@ public sealed class StickerPackExporterTests : IDisposable
     {
         var path = Image(filename, format);
         var transform = new TransformSettings { Rotation = -35, FlipHorizontal = true, Scale = .8 };
-        var layers = new List<TextLayer> { new() { Text = "Привет\nWorld", X = 210, Y = 80, FontSize = 50, Color = "#FFFFFFFF" }, new() { Text = "hidden", IsVisible = false } };
+        var layers = new List<TextLayer> { new() { Text = "Привет\nWorld שלום 👩‍💻", X = 210, Y = 80, FontSize = 50, Color = "#FFFFFFFF" }, new() { Text = "hidden", IsVisible = false } };
+        var bundled = BundledFontCatalog.Load()?.Families.FirstOrDefault(family => family.Id == "roboto");
+        if (bundled is not null) { layers[0].FontFamily = bundled.Name; layers[0].FontAsset = bundled.Id + "/" + bundled.Fonts[0].File; }
         using var image = SKImage.FromEncodedData(path); using var preview = StickerPackExporter.Render(image, transform, layers); using var expected = SKBitmap.FromImage(preview);
         var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = path, Transform = transform, TextLayers = layers }], directory, "text");
         Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors));

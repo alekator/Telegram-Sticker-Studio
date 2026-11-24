@@ -197,6 +197,11 @@
         "resolved": "0.94.1",
         "contentHash": "11YMr7FnAbL83bQmVxlhbIKHvSLxjO81D12Ej0QMSGXMDTxNA9MTOa4MQxx43nv5el/efuPHwzyrj6a5ha2gug=="
       },
+      "Unicode.Bidi": {
+        "type": "Transitive",
+        "resolved": "0.4.0",
+        "contentHash": "O5225Ij89vCsmz1Iq481CvVyDq7FeIsyPCdyLivDlOE7O3kH75fibI5b2Fvzym1QKvSCWMjDfAH/IheZrAfUaw=="
+      },
       "stickerforge.core": {
         "type": "Project"
       },
@@ -211,7 +216,8 @@
         "dependencies": {
           "SkiaSharp": "[3.119.4, )",
           "SkiaSharp.HarfBuzz": "[3.119.4, )",
-          "StickerForge.Core": "[1.0.0, )"
+          "StickerForge.Core": "[1.0.0, )",
+          "Unicode.Bidi": "[0.4.0, )"
         }
       }
     },

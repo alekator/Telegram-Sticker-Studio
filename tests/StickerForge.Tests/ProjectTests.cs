@@ -65,7 +65,7 @@ public sealed class ProjectTests : IDisposable
     public async Task TextLayersRoundTripIndependentlyAndInOrder()
     {
         var path = Path.Combine(directory, "text.json");
-        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", X = 42, Y = 180, Rotation = -25, IsLocked = true };
+        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", FontAsset = "roboto/Roboto[wdth,wght].ttf", X = 42, Y = 180, Rotation = -25, IsLocked = true };
         var second = new TextLayer { Text = "Second", IsVisible = false, LetterSpacing = 2 };
         var project = new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "one.png"), TextLayers = [first, second] }, new() { SourcePath = Path.Combine(directory, "two.gif") }] };
         var store = new ProjectStore();
@@ -75,6 +75,25 @@ public sealed class ProjectTests : IDisposable
         Assert.Empty(loaded.Stickers[1].TextLayers);
         loaded.Stickers[1].TextLayers.Add(new TextLayer());
         Assert.Equal(2, loaded.Stickers[0].TextLayers.Count);
+    }
+
+    [Fact]
+    public void FontFavoritesAndRecentSurviveRestartAndDamagedSettings()
+    {
+        var path = Path.Combine(directory, "font-preferences.json");
+        new FontPreferencesStore(path).Save(new FontPreferences(["roboto", "system:Arial"], ["roboto"]));
+        var loaded = new FontPreferencesStore(path).Load();
+        Assert.Equal(new[] { "roboto", "system:Arial" }, loaded.Favorites); Assert.Equal(new[] { "roboto" }, loaded.Recent);
+        File.WriteAllText(path, "{"); Assert.Empty(new FontPreferencesStore(path).Load().Favorites);
+    }
+
+    [Fact]
+    public void BundledFontPathsRejectTraversalAndMissingFiles()
+    {
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("../Arial.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("roboto/../../Arial.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Resolve("roboto/missing.ttf", directory));
+        Assert.Throws<InvalidDataException>(() => BundledFontCatalog.Typeface(new TextLayer { FontAsset = "missing/missing.ttf" }));
     }
 
     [Fact]

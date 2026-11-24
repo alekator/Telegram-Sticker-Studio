@@ -21,6 +21,7 @@ internal sealed class TextOverlayControl : Control
     public Action? Changed { get; set; }
     public Action<TextLayer?>? SelectionChanged { get; set; }
     public Action? EditRequested { get; set; }
+    public Action<string>? RenderingFailed { get; set; }
     public bool Editing { get; set; }
 
     public void SetItem(StickerItem? value) { item = value; selected = null; Refresh(); }
@@ -30,9 +31,13 @@ internal sealed class TextOverlayControl : Control
         bitmap?.Dispose(); bitmap = null;
         if (item is { TextLayers.Count: > 0 })
         {
-            using var image = TextLayerRenderer.RenderOverlay(item.TextLayers);
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            using var stream = new MemoryStream(data.ToArray()); bitmap = new Bitmap(stream);
+            try
+            {
+                using var image = TextLayerRenderer.RenderOverlay(item.TextLayers);
+                using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+                using var stream = new MemoryStream(data.ToArray()); bitmap = new Bitmap(stream);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { RenderingFailed?.Invoke(ex.Message); }
         }
         InvalidateVisual();
     }
@@ -42,7 +47,9 @@ internal sealed class TextOverlayControl : Control
         base.Render(context);
         if (bitmap is not null) context.DrawImage(bitmap, new Rect(0, 0, 512, 512));
         if (!Editing || selected is not { IsVisible: true } layer) return;
-        var bounds = LocalBounds(layer);
+        Rect bounds;
+        try { bounds = LocalBounds(layer); }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { RenderingFailed?.Invoke(ex.Message); return; }
         var transform = Matrix.CreateRotation(layer.Rotation * Math.PI / 180) * Matrix.CreateTranslation(layer.X, layer.Y);
         using (context.PushTransform(transform))
         {
@@ -61,6 +68,8 @@ internal sealed class TextOverlayControl : Control
         if (!Editing || item is null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         var point = e.GetPosition(this);
         TextLayer? hit = null; string? mode = null;
+        try
+        {
         if (selected is { IsVisible: true, IsLocked: false } active)
         {
             var local = ToLocal(point, active); var bounds = LocalBounds(active);
@@ -80,6 +89,8 @@ internal sealed class TextOverlayControl : Control
         startDistance = Math.Max(1, Distance(point, new Point(hit.X, hit.Y)));
         startAngle = Math.Atan2(point.Y - hit.Y, point.X - hit.X);
         e.Pointer.Capture(this); e.Handled = true;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { RenderingFailed?.Invoke(ex.Message); e.Handled = true; }
     }
     protected override void OnPointerMoved(PointerEventArgs e)
     {
@@ -100,9 +111,9 @@ internal sealed class TextOverlayControl : Control
     }
     private static double Distance(Point a, Point b) => Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
     private static Point[] Corners(Rect r) => [r.TopLeft, r.TopRight, r.BottomLeft, r.BottomRight];
-    private static Rect LocalBounds(TextLayer layer)
+    internal static Rect LocalBounds(TextLayer layer)
     {
-        using var typeface = SKFontManager.Default.MatchFamily(layer.FontFamily) ?? SKTypeface.Default;
+        using var typeface = BundledFontCatalog.Typeface(layer);
         using var font = new SKFont(typeface, (float)Math.Clamp(layer.FontSize, 1, 512));
         var lines = (layer.Text ?? "").Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var width = Math.Max(24, lines.Max(line => font.MeasureText(line) + Math.Max(0, line.Length - 1) * layer.LetterSpacing)) * layer.Scale;

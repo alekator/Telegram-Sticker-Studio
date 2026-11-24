@@ -21,9 +21,7 @@ public static class TextLayerRenderer
 
     private static void Draw(SKCanvas canvas, TextLayer layer)
     {
-        var style = new SKFontStyle(layer.Bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal,
-            SKFontStyleWidth.Normal, layer.Italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright);
-        using var typeface = SKFontManager.Default.MatchFamily(layer.FontFamily, style) ?? SKTypeface.Default;
+        using var typeface = BundledFontCatalog.Typeface(layer);
         using var font = new SKFont(typeface, (float)Math.Clamp(layer.FontSize, 1, 512));
         var color = SKColor.TryParse(layer.Color, out var parsed) ? parsed : SKColors.White;
         using var paint = new SKPaint { IsAntialias = true, Color = color.WithAlpha((byte)Math.Clamp(Math.Round(color.Alpha * Math.Clamp(layer.Opacity, 0, 1)), 0, 255)) };
@@ -38,27 +36,50 @@ public static class TextLayerRenderer
         var firstBaseline = -(lines.Length - 1) * lineHeight / 2 - (metrics.Ascent + metrics.Descent) / 2;
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
-            var elements = new List<string>();
-            var iterator = StringInfo.GetTextElementEnumerator(lines[lineIndex]);
-            while (iterator.MoveNext()) elements.Add((string)iterator.Current!);
-            var runs = new List<(string Text, SKFont Font, SKTypeface? Fallback)>();
+            var line = lines[lineIndex];
+            if (line.Length == 0) continue;
+            var visualRuns = GetVisualRuns(line);
+            var runs = new List<(string Text, SKFont Font, SKTypeface? Fallback, bool RightToLeft)>();
             try
             {
-                var common = new StringBuilder();
-                void FlushCommon() { if (common.Length > 0) { runs.Add((common.ToString(), font, null)); common.Clear(); } }
-                foreach (var element in elements)
+                foreach (var visualRun in visualRuns)
                 {
-                    SKTypeface? fallback = null;
-                    if (font.GetGlyphs(element).Any(glyph => glyph == 0))
+                    var rightToLeft = visualRun.RightToLeft;
+                    var segments = new List<(string Text, SKFont Font, SKTypeface? Fallback, bool RightToLeft)>();
+                    var common = new StringBuilder();
+                    void FlushCommon() { if (common.Length > 0) { segments.Add((common.ToString(), font, null, rightToLeft)); common.Clear(); } }
+                    var iterator = StringInfo.GetTextElementEnumerator(visualRun.Text);
+                    while (iterator.MoveNext())
                     {
-                        var rune = element.EnumerateRunes().First();
-                        fallback = SKFontManager.Default.MatchCharacter(rune.Value);
+                        var element = (string)iterator.Current!;
+                        SKTypeface? fallback = null;
+                        if (font.GetGlyphs(element).Any(glyph => glyph == 0))
+                        {
+                            var rune = element.EnumerateRunes().First();
+                            fallback = BundledFontCatalog.Fallback(element) ?? SKFontManager.Default.MatchCharacter(rune.Value);
+                        }
+                        if (fallback is null) common.Append(element);
+                        else
+                        {
+                            FlushCommon();
+                            if (segments.Count > 0 && segments[^1].Fallback is { } previous && previous.FamilyName == fallback.FamilyName)
+                            {
+                                var last = segments[^1]; segments[^1] = (last.Text + element, last.Font, last.Fallback, last.RightToLeft); fallback.Dispose();
+                            }
+                            else segments.Add((element, new SKFont(fallback, font.Size), fallback, rightToLeft));
+                        }
                     }
-                    if (fallback is null) common.Append(element);
-                    else { FlushCommon(); runs.Add((element, new SKFont(fallback, font.Size), fallback)); }
+                    FlushCommon();
+                    if (rightToLeft) segments.Reverse();
+                    runs.AddRange(segments);
                 }
-                FlushCommon();
-                var shaped = runs.Select(run => { using var shaper = new SKShaper(run.Font.Typeface); return shaper.Shape(run.Text, run.Font); }).ToArray();
+                var shaped = runs.Select(run =>
+                {
+                    using var shaper = new SKShaper(run.Font.Typeface);
+                    using var buffer = new HarfBuzzSharp.Buffer(); buffer.AddUtf16(run.Text); buffer.GuessSegmentProperties();
+                    buffer.Direction = run.RightToLeft ? HarfBuzzSharp.Direction.RightToLeft : HarfBuzzSharp.Direction.LeftToRight;
+                    return shaper.Shape(buffer, run.Font);
+                }).ToArray();
                 var clusterCount = shaped.Sum(run => run.Clusters.Distinct().Count());
                 var width = shaped.Sum(run => run.Width) + Math.Max(0, clusterCount - 1) * spacing;
                 var x = layer.Alignment switch { TextLayerAlignment.Left => 0, TextLayerAlignment.Right => -width, _ => -width / 2 };
@@ -81,5 +102,18 @@ public static class TextLayerRenderer
             finally { foreach (var run in runs) if (run.Fallback is not null) { run.Font.Dispose(); run.Fallback.Dispose(); } }
         }
         canvas.Restore();
+    }
+
+    internal static (string Text, bool RightToLeft)[] GetVisualRuns(string line)
+    {
+        if (line.Length == 0) return [];
+        var bidi = Unicode.Bidi.BidiInfo.Create(line, null);
+        var result = new List<(string, bool)>();
+        foreach (var paragraph in bidi.Paragraphs)
+        {
+            var (levels, ranges) = bidi.VisualRuns(paragraph, paragraph.Range);
+            result.AddRange(ranges.Select(range => (line.Substring(range.Start, range.Length), levels[range.Start].IsRtl())));
+        }
+        return result.ToArray();
     }
 }

@@ -27,6 +27,8 @@ public sealed class VideoIntegrationTests
                 var path = Path.Combine(dir, name);
                 await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=96x48:r=10", "-t", "1", "-c:v", codec, "-y", path);
                 var layer = new TextLayer { Text = "Привет!", FontSize = 54, X = 256, Y = 50 };
+                var bundled = BundledFontCatalog.Load()?.Families.FirstOrDefault(family => family.Id == "roboto");
+                if (bundled is not null) { layer.FontFamily = bundled.Name; layer.FontAsset = bundled.Id + "/" + bundled.Fonts[0].File; }
                 var report = await new StickerPackExporter(new FfmpegService()).ExportAsync([new StickerItem { SourcePath = path, TextLayers = [layer] }], dir, name + "-out");
                 Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors));
                 foreach (var time in new[] { 0d, .5d })

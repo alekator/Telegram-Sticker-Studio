@@ -26,6 +26,8 @@ public sealed class TextLayer : System.ComponentModel.INotifyPropertyChanged
     public string Name { get => name; set { if (name == value) return; name = value; PropertyChanged?.Invoke(this, new(nameof(Name))); } }
     public string Text { get; set; } = "";
     public string FontFamily { get; set; } = "Arial";
+    // Relative to the bundled font catalog, never an arbitrary project file path.
+    public string? FontAsset { get; set; }
     public bool Bold { get; set; }
     public bool Italic { get; set; }
     public double FontSize { get; set; } = 48;

@@ -6,6 +6,8 @@ using Avalonia.Media;
 using Avalonia.Data;
 using SkiaSharp;
 using StickerForge.Core;
+using StickerForge.Media;
+using StickerForge.Infrastructure;
 
 namespace StickerForge.Desktop;
 
@@ -15,6 +17,7 @@ internal sealed class TextEditorPanel : StackPanel
     private readonly Action changed;
     private readonly Action selectionChanged;
     private readonly StudioTheme theme;
+    private readonly FontPreferencesStore fontPreferences;
     private StickerItem? item;
     private TextLayer? selected;
     private bool updating;
@@ -22,9 +25,11 @@ internal sealed class TextEditorPanel : StackPanel
     private string language = "ru";
 
     public TextLayer? Selected => selected;
-    public TextEditorPanel(StudioTheme theme, Action changed, Action selectionChanged)
+    public Action? LayerAdded { get; set; }
+    public TextEditorPanel(StudioTheme theme, Action changed, Action selectionChanged, FontPreferencesStore? fontPreferences = null)
     {
         this.theme = theme;
+        this.fontPreferences = fontPreferences ?? new();
         this.changed = changed;
         this.selectionChanged = selectionChanged;
         Spacing = 8;
@@ -57,7 +62,7 @@ internal sealed class TextEditorPanel : StackPanel
         var layerControls = new StackPanel { Spacing = 4 };
         Children.Add(Section("Слои текста", layerControls));
         var actions = new WrapPanel();
-        actions.Children.Add(ActionButton("Добавить текст", () => { var layer = new TextLayer { Name = $"{StudioLocalization.Text("Текст", language)} {item.TextLayers.Count + 1}", Text = StudioLocalization.Text("Текст", language) }; item.TextLayers.Add(layer); selected = layer; ChangedAndRebuild(); }));
+        actions.Children.Add(ActionButton("Добавить текст", () => { var layer = new TextLayer { Name = $"{StudioLocalization.Text("Текст", language)} {item.TextLayers.Count + 1}", Text = StudioLocalization.Text("Текст", language) }; item.TextLayers.Add(layer); selected = layer; ChangedAndRebuild(); LayerAdded?.Invoke(); }));
         actions.Children.Add(ActionButton("Дублировать", () => { if (selected is null) return; var copy = System.Text.Json.JsonSerializer.Deserialize<TextLayer>(System.Text.Json.JsonSerializer.Serialize(selected))!; copy.Id = Guid.NewGuid(); copy.X += 12; copy.Y += 12; item.TextLayers.Insert(item.TextLayers.IndexOf(selected) + 1, copy); selected = copy; ChangedAndRebuild(); }));
         var delete = ActionButton("Удалить", () => { if (selected is null || selected.IsLocked) return; item.TextLayers.Remove(selected); selected = item.TextLayers.LastOrDefault(); ChangedAndRebuild(); });
         delete.IsEnabled = selected is { IsLocked: false }; actions.Children.Add(delete);
@@ -80,16 +85,40 @@ internal sealed class TextEditorPanel : StackPanel
         var name = new TextBox { Text = current.Name };
         name.TextChanged += (_, _) => { if (!updating) { current.Name = name.Text ?? ""; changed(); } }; fields.Children.Add(name);
         fields.Children.Add(new TextBlock { Text = "Текст" });
+        FontCatalogPicker? activePicker = null;
         var text = new TextBox { Text = current.Text, AcceptsReturn = true, MinHeight = 56, TextWrapping = TextWrapping.Wrap }; textField = text;
-        text.TextChanged += (_, _) => { if (!updating) { current.Text = text.Text ?? ""; changed(); } }; fields.Children.Add(text);
+        text.TextChanged += (_, _) => { if (!updating) { current.Text = text.Text ?? ""; changed(); activePicker?.RefreshPreview(); } }; fields.Children.Add(text);
         fields.Children.Add(new TextBlock { Text = "Шрифт" });
-        var family = new ComboBox { ItemsSource = SKFontManager.Default.FontFamilies.OrderBy(x => x).ToArray(), SelectedItem = current.FontFamily, IsEditable = true, Text = current.FontFamily, HorizontalAlignment = HorizontalAlignment.Stretch };
-        family.SelectionChanged += (_, _) => { if (!updating && family.SelectedItem is string value) { current.FontFamily = value; changed(); } }; fields.Children.Add(family);
+        var family = ActionButton(current.FontFamily, () => { });
+        family.HorizontalAlignment = HorizontalAlignment.Stretch; family.HorizontalContentAlignment = HorizontalAlignment.Left;
+        var fontPickerHost = new Flyout { Placement = PlacementMode.Top };
+        family.Click += (_, _) =>
+        {
+            activePicker = new FontCatalogPicker(current, theme, () => { fontPickerHost.Hide(); changed(); Rebuild(); selectionChanged(); }, language, fontPreferences);
+            fontPickerHost.Content = new Border { Width = 330, Padding = new Thickness(10), Background = theme.Panel, BorderBrush = theme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Child = activePicker };
+            fontPickerHost.ShowAt(family);
+        };
+        fields.Children.Add(family);
+        var bundledFamily = string.IsNullOrEmpty(current.FontAsset) ? null : BundledFontCatalog.Load()?.Families.FirstOrDefault(f => current.FontAsset.StartsWith(f.Id + "/", StringComparison.Ordinal));
+        if (bundledFamily is not null)
+        {
+            fields.Children.Add(new TextBlock { Text = "Начертание" });
+            var face = new ComboBox { ItemsSource = bundledFamily.Fonts.Select(f => $"{f.Style} · {f.Weight}").ToArray(), HorizontalAlignment = HorizontalAlignment.Stretch };
+            face.SelectedIndex = Array.FindIndex(bundledFamily.Fonts, f => current.FontAsset == bundledFamily.Id + "/" + f.File);
+            face.SelectionChanged += (_, _) =>
+            {
+                if (updating || face.SelectedIndex < 0) return;
+                var selectedFace = bundledFamily.Fonts[face.SelectedIndex]; current.FontAsset = bundledFamily.Id + "/" + selectedFace.File;
+                current.Bold = selectedFace.Weight >= 600; current.Italic = selectedFace.Style == "italic"; changed(); Rebuild(); selectionChanged();
+            };
+            fields.Children.Add(face);
+        }
         var fontActions = new WrapPanel();
         var bold = new CheckBox { Content = "Жирный", IsChecked = current.Bold, Margin = new Thickness(4) };
         bold.IsCheckedChanged += (_, _) => { current.Bold = bold.IsChecked == true; changed(); };
         var italic = new CheckBox { Content = "Курсив", IsChecked = current.Italic, Margin = new Thickness(4) };
         italic.IsCheckedChanged += (_, _) => { current.Italic = italic.IsChecked == true; changed(); };
+        bold.IsEnabled = italic.IsEnabled = bundledFamily is null;
         fontActions.Children.Add(bold); fontActions.Children.Add(italic); fields.Children.Add(fontActions);
         fields.Children.Add(Number("Размер", current.FontSize, 1, 512, value => current.FontSize = value));
         fields.Children.Add(new TextBlock { Text = "Цвет (#AARRGGBB)" });
@@ -132,7 +161,7 @@ internal sealed class TextEditorPanel : StackPanel
     private Control Number(string label, double value, double min, double max, Action<double> setter)
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"), ColumnSpacing = 8 };
-        grid.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        grid.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
         var input = new NumericUpDown { Minimum = (decimal)min, Maximum = (decimal)max, Value = (decimal)Math.Clamp(value, min, max), Increment = 1, ShowButtonSpinner = false, FormatString = "0.##", Height = 34 };
         input.ValueChanged += (_, _) => { if (!updating && input.Value is { } next) { setter((double)next); changed(); } };
         Grid.SetColumn(input, 1); grid.Children.Add(input); return grid;

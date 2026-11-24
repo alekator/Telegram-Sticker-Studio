@@ -27,6 +27,54 @@ public sealed class WindowLayoutTestApp : Application
 [Collection("Avalonia Headless")]
 public sealed class WindowLayoutTests
 {
+    [FontBundleFact]
+    public async Task CatalogSearchSelectsBundledFontAndPersistsFavorites()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-font-ui-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(async () =>
+            {
+                var path = Path.Combine(directory, "image.png");
+                using (var image = new SKBitmap(64, 64)) using (var frame = SKImage.FromBitmap(image)) using (var png = frame.Encode(SKEncodedImageFormat.Png, 100)) File.WriteAllBytes(path, png.ToArray());
+                var fontPrefs = new FontPreferencesStore(Path.Combine(directory, "fonts.json"));
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "layout.json")), new UiPreferencesStore(Path.Combine(directory, "ui.json")), fontPrefs) { Width = 1280, Height = 800 }; window.Show();
+                try
+                {
+                    await (Task)typeof(MainWindow).GetMethod("ImportAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [new[] { path }])!;
+                    var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!; gallery.SelectedIndex = 0; await Task.Delay(100);
+                    window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Текст").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(30);
+                    window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Добавить текст").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+                    window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null); await Task.Delay(30);
+                    window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Arial").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(100);
+                    var picker = window.GetVisualDescendants().OfType<Control>().Single(c => c.GetType().Name == "FontCatalogPicker");
+                    var search = picker.GetVisualDescendants().OfType<TextBox>().Single(box => box.PlaceholderText == "Поиск шрифта");
+                    search.Text = "Roboto"; await Task.Delay(100);
+                    var list = picker.GetVisualDescendants().OfType<ListBox>().Single();
+                    var choice = list.Items.Cast<object>().First(item => (string)item.GetType().GetProperty("Id")!.GetValue(item)! == "roboto");
+                    var row = list.GetVisualDescendants().OfType<ListBoxItem>().First(item => ReferenceEquals(item.DataContext, choice));
+                    var star = row.GetVisualDescendants().OfType<Button>().Single();
+                    var starPoint = star.TranslatePoint(new Point(star.Bounds.Width / 2, star.Bounds.Height / 2), window)!.Value;
+                    window.MouseDown(starPoint, MouseButton.Left, RawInputModifiers.None); window.MouseUp(starPoint, MouseButton.Left, RawInputModifiers.None); await Task.Delay(50);
+                    Assert.Contains("roboto", fontPrefs.Load().Favorites);
+                    list.SelectedItem = choice; await Task.Delay(100);
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var layer = Assert.Single(project.Stickers[0].TextLayers); Assert.StartsWith("roboto/", layer.FontAsset); Assert.Contains("roboto", fontPrefs.Load().Recent);
+                    var overlay = (Control)typeof(MainWindow).GetField("textOverlay", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var point = overlay.TranslatePoint(new Point(layer.X, layer.Y), window)!.Value;
+                    window.MouseDown(point, MouseButton.Left, RawInputModifiers.None); window.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                    window.MouseDown(point, MouseButton.Left, RawInputModifiers.None); window.MouseUp(point, MouseButton.Left, RawInputModifiers.None); await Task.Delay(100);
+                    var inline = window.GetVisualDescendants().OfType<TextBox>().Single(box => box.Classes.Contains("inline-text"));
+                    Assert.True(inline.IsVisible); Assert.Contains("StickerForgeInline", inline.FontFamily.ToString());
+                }
+                finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
+                return true;
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public async Task TextEditorCanRenderInBothThemes()
     {
@@ -57,6 +105,11 @@ public sealed class WindowLayoutTests
                         using var screenshot = window.CaptureRenderedFrame(); Assert.NotNull(screenshot);
                         var output = Environment.GetEnvironmentVariable("STICKERFORGE_SCREENSHOT_DIR") ?? AppContext.BaseDirectory;
                         Directory.CreateDirectory(output); screenshot.Save(Path.Combine(output, "text-editor-" + theme + ".png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+                        window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null); await Task.Delay(30);
+                        var fontButton = window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Arial");
+                        fontButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(200);
+                        using var catalogImage = window.CaptureRenderedFrame(); Assert.NotNull(catalogImage);
+                        catalogImage.Save(Path.Combine(output, "font-catalog-" + theme + ".png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
                     }
                     finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
                 }
@@ -90,6 +143,10 @@ public sealed class WindowLayoutTests
                     add.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
                     var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var layer = Assert.Single(project.Stickers[0].TextLayers);
+                    var inline = window.GetVisualDescendants().OfType<TextBox>().Single(box => box.Classes.Contains("inline-text"));
+                    Assert.True(inline.IsVisible); Assert.Equal(layer.Text, inline.Text); Assert.Equal(inline.Text!.Length, Math.Abs(inline.SelectionEnd - inline.SelectionStart));
+                    inline.Text = "Строка 1\nLine 2"; await Task.Delay(30); Assert.Equal("Строка 1\nLine 2", layer.Text);
+                    window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null); await Task.Delay(30); Assert.False(inline.IsVisible);
                     var overlay = (Control)typeof(MainWindow).GetField("textOverlay", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
                     var from = overlay.TranslatePoint(new Point(layer.X, layer.Y), window)!.Value;
                     var to = overlay.TranslatePoint(new Point(layer.X + 30, layer.Y + 20), window)!.Value;
@@ -112,7 +169,7 @@ public sealed class WindowLayoutTests
                     to = overlay.TranslatePoint(new Point(layer.X + 60, layer.Y), window)!.Value;
                     window.MouseDown(from, MouseButton.Left, RawInputModifiers.None); window.MouseMove(to, RawInputModifiers.LeftMouseButton); window.MouseUp(to, MouseButton.Left, RawInputModifiers.None); await Task.Delay(30);
                     Assert.InRange(layer.Rotation, 85, 95);
-                    var content = window.GetVisualDescendants().OfType<TextBox>().First(box => box.AcceptsReturn && box.IsVisible && box.Text == "Текст");
+                    var content = window.GetVisualDescendants().OfType<TextBox>().First(box => box.AcceptsReturn && box.IsVisible && box.Text == "Строка 1\nLine 2");
                     content.Text = "Привет\nWorld"; await Task.Delay(50); Assert.Equal("Привет\nWorld", layer.Text);
                     var duplicate = window.GetVisualDescendants().OfType<Button>().First(button => (button.Content as string) == "Дублировать");
                     duplicate.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
