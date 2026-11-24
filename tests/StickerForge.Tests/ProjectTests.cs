@@ -69,6 +69,10 @@ public sealed class ProjectTests : IDisposable
         var second = new TextLayer { Text = "Second", IsVisible = false, LetterSpacing = 2 };
         first.Background = new() { Enabled = true, PerLine = true, PaddingX = 12, BorderWidth = 3, Gradient = new() { Enabled = true } };
         first.Extrusion = new() { Enabled = true, Depth = 15, Angle = 75, Shading = .5 };
+        first.RasterEffects = new() { BlurEnabled = true, BlurRadius = 3, PixelationEnabled = true, PixelSize = 9, ChromaticEnabled = true, ChromaticOffset = 6, MetallicEnabled = true, MetallicStrength = .7, GlossEnabled = true, GlossStrength = .4 };
+        first.Curvature = -75;
+        first.RasterEffects.Emboss = new() { Enabled = true, Depth = 4, Angle = 30, Strength = .8 };
+        first.RasterEffects.Inset = new() { Enabled = true, Depth = 2, Angle = 75, Strength = .3 };
         var project = new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "one.png"), TextLayers = [first, second] }, new() { SourcePath = Path.Combine(directory, "two.gif") }] };
         var store = new ProjectStore();
         await store.SaveAsync(project, path);

@@ -57,6 +57,11 @@ internal static class StudioLocalization
         , ["Сбросить обводку"] = "Reset outline", ["Сбросить тень"] = "Reset shadow", ["Сбросить свечение"] = "Reset glow", ["Сбросить градиент"] = "Reset gradient", ["Сбросить объём"] = "Reset extrusion", ["Сбросить подложку"] = "Reset background", ["Сбросить все эффекты"] = "Reset all effects"
         , ["Расстояние"] = "Distance"
         , ["Внутреннее свечение"] = "Inner glow", ["Интенсивность, %"] = "Intensity, %"
+        , ["Дополнительные эффекты"] = "Additional effects", ["Размытие текста"] = "Blur text", ["Радиус размытия"] = "Blur radius", ["Пикселизация текста"] = "Pixelate text", ["Размер пикселя"] = "Pixel size", ["Сбросить дополнительные эффекты"] = "Reset additional effects"
+        , ["Кривизна, °"] = "Curvature, °"
+        , ["Смещение RGB"] = "RGB shift", ["Смещение каналов"] = "Channel offset"
+        , ["Металлический эффект"] = "Metallic", ["Цвет металла (#AARRGGBB)"] = "Metal color (#AARRGGBB)", ["Глянец"] = "Gloss"
+        , ["Тиснение"] = "Emboss", ["Вдавленный текст"] = "Inset text"
     };
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, LocalizedKey> TooltipKeys = new();
     public static string Text(string text, string language) => language == "en" && English.TryGetValue(text, out var value) ? value : text;

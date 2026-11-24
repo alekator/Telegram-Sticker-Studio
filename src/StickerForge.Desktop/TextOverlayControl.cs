@@ -118,10 +118,13 @@ internal sealed class TextOverlayControl : Control
         var content = layer.Text ?? "";
         content = layer.Case switch { TextCase.Upper => content.ToUpperInvariant(), TextCase.Lower => content.ToLowerInvariant(), _ => content };
         var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var width = Math.Max(24, lines.Max(line => font.MeasureText(line) + Math.Max(0, line.Length - 1) * layer.LetterSpacing)) * layer.Scale * Math.Clamp(layer.StretchX, .1, 10);
+        var rawWidth = Math.Max(24, lines.Max(line => font.MeasureText(line) + Math.Max(0, line.Length - 1) * layer.LetterSpacing));
+        var width = rawWidth * layer.Scale * Math.Clamp(layer.StretchX, .1, 10);
         var height = Math.Max(24, (font.Metrics.Descent - font.Metrics.Ascent) * (1 + (lines.Length - 1) * layer.LineSpacing)) * layer.Scale * Math.Clamp(layer.StretchY, .1, 10);
         var x = layer.Alignment switch { TextLayerAlignment.Left => 0, TextLayerAlignment.Right => -width, _ => -width / 2 };
-        var shear = Math.Abs(Math.Clamp(layer.Skew, -2, 2)) * height / 2;
-        return new Rect(x - shear, -height / 2, width + shear * 2, height);
+        var radians = Math.Clamp(layer.Curvature, -300, 300) * Math.PI / 180;
+        var sag = Math.Abs(radians) < .00001 ? 0 : rawWidth / radians * (1 - Math.Cos(radians / 2)) * layer.Scale * Math.Clamp(layer.StretchY, .1, 10);
+        var shear = Math.Abs(Math.Clamp(layer.Skew, -2, 2)) * (height / 2 + Math.Abs(sag));
+        return new Rect(x - shear, -height / 2 + Math.Min(0, sag), width + shear * 2, height + Math.Abs(sag));
     }
 }

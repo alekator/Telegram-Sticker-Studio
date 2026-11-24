@@ -14,12 +14,13 @@ public sealed class TextStyle
     public TextGradient Gradient { get; set; } = new();
     public TextBackground Background { get; set; } = new();
     public TextExtrusion Extrusion { get; set; } = new();
+    public TextRasterEffects RasterEffects { get; set; } = new();
 
     public static TextStyle Capture(TextLayer layer, string name) => Clone(new TextStyle
     {
         Name = name, Color = layer.Color, Opacity = layer.Opacity, Outlines = layer.Outlines,
         Shadow = layer.Shadow, Glow = layer.Glow, Gradient = layer.Gradient,
-        Background = layer.Background, Extrusion = layer.Extrusion
+        Background = layer.Background, Extrusion = layer.Extrusion, RasterEffects = layer.RasterEffects
     });
 
     public void Apply(TextLayer layer)
@@ -28,6 +29,7 @@ public sealed class TextStyle
         layer.Color = copy.Color; layer.Opacity = copy.Opacity; layer.Outlines = copy.Outlines;
         layer.Shadow = copy.Shadow; layer.Glow = copy.Glow; layer.Gradient = copy.Gradient;
         layer.Background = copy.Background; layer.Extrusion = copy.Extrusion;
+        layer.RasterEffects = copy.RasterEffects;
     }
 
     private static TextStyle Clone(TextStyle value) => JsonSerializer.Deserialize<TextStyle>(JsonSerializer.Serialize(value))!;

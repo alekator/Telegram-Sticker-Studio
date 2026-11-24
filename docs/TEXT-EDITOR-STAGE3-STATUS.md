@@ -25,31 +25,52 @@ on `feature/text-editor` and Draft PR #15. Do not merge or publish a release.
   targeted checks cover rendering and serialization. Whole-text background
   width currently uses basic font measurement and must be replaced by actual
   shaped bounds, especially for fallback glyphs and complex scripts.
-- Added 16 working presets and persistent custom styles with preview, rename
+- Added working presets and persistent custom styles with preview, rename
   and delete. Applying a style preserves text and geometry and deep-copies
   effect settings; one targeted test checks this. Style preview bytes are
-  cached. The full requested preset list still needs implementation.
+  cached. The requested preset list has since been filled out as described below.
 - Existing editor sections are collapsible with state retained across rebuilds;
   numeric inputs now have synchronized sliders. Individual and full effect
   resets were added. Shadow angle/distance and X/Y controls synchronize; a
   targeted headless check covers them. Layout still requires visual review.
 - Added independent inner and outer glow controls including intensity. Inner
-  glow is masked with the rasterized glyph and a targeted alpha test passes.
-  Its current per-run 512×512 mask allocation needs optimization.
+  glow is masked with the rasterized glyph. Inner glow, emboss and inset now
+  share one mask per shaped run; further mask/geometry optimization remains.
+- Added a real curved baseline using per-glyph rotation and curved decorations;
+  curvature persists in projects. Selection bounds are approximate and inline
+  caret/selection do not yet follow curved, skewed or stretched glyphs.
+- Added blur, pixelation, RGB channel shift, metallic and gloss overlays,
+  emboss and inset; all have serialized controls and are part of custom styles.
+  Targeted rendering/alpha and project round-trip checks passed. The optimized
+  premultiplied RGB path was checked for opaque and translucent text. Metallic
+  and gloss now use the same glyph processing, and relief uses the processed
+  glyph mask; one combined pixelation/metal/gloss/relief alpha check passed.
+- Added the remaining named styles, bringing the preset list to 27. They use
+  implemented parameters and have visual previews. Visual quality and the
+  full range of editable settings still need Windows review.
+- Whole-text and per-line backgrounds use bounds of the shaped/rotated text
+  blobs and are composited behind the layer; a mixed-script curved text test
+  passed. Text selection/effect bounds are still estimated rather than exact.
+- Added a bounded cache for unchanged rendered layers. Cached bundled fonts are
+  re-resolved and integrity-checked. Cache invalidation was tested; geometry
+  and font-face caching, native resource profiling and effect ordering remain.
+- Targeted export comparisons passed for PNG/JPG with curvature and effects,
+  and for GIF/MP4 at two frames with curvature, gradient, glow, outline,
+  background, metallic and emboss. They do not cover all combinations.
 
 ## Remaining work
 
 - Visually verify picker theme/focus/dropdowns in both themes and RU/EN. Verify
   the color popup, its placement at small window sizes, alpha and eyedropper for
   stills and playing/paused GIF/MP4. Confirm transparent-pixel behavior.
-- Implement curved text and ensure direct canvas selection, handles and caret
-  agree with stretch, skew, case, curvature and effect bounds.
-- Finish effects: blur, pixelation, RGB
-  offset, metallic, gloss, emboss and inset. Use real serialized settings;
-  no stubs. Verify background measurement and avoid overlap between per-line
-  backgrounds and other lines; validate extrusion with outlines and fallback.
-- Complete all remaining requested named presets using actual implemented
-  parameters; ensure custom styles include any newly introduced effects.
+- Make direct canvas selection, handles and caret agree with stretch, skew,
+  case, curvature and the exact bounds of effects. Check curved text with
+  ligatures, RTL scripts, emoji, fallback fonts and several lines.
+- Verify and correct combinations of all effects, including processed glyphs
+  with metallic/gloss/relief and output across multiple shaped runs. Validate
+  extrusion with outlines and fallback, and backgrounds for complex scripts.
+- Visually review all named presets and ensure custom styles include any
+  newly introduced effects.
 - Complete the specified section structure and order, including newly added
   effects. Verify both locales and themes and short/narrow window layouts.
 - Optimize font, glyph geometry and unchanged-layer caching, with correct

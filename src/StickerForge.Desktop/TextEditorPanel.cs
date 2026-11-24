@@ -162,6 +162,7 @@ internal sealed class TextEditorPanel : StackPanel
         fields.Children.Add(Number("Растяжение X, %", current.StretchX * 100, 10, 1000, value => current.StretchX = value / 100));
         fields.Children.Add(Number("Растяжение Y, %", current.StretchY * 100, 10, 1000, value => current.StretchY = value / 100));
         fields.Children.Add(Number("Наклон, %", current.Skew * 100, -200, 200, value => current.Skew = value / 100));
+        fields.Children.Add(Number("Кривизна, °", current.Curvature, -300, 300, value => current.Curvature = value));
         Children.Add(Section("Текст", fields));
         var stylesPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
         var styleError = new TextBlock { Foreground = theme.Secondary, TextWrapping = TextWrapping.Wrap };
@@ -360,8 +361,47 @@ internal sealed class TextEditorPanel : StackPanel
         backgroundFields.Children.Add(bgGradientEnabled); backgroundFields.Children.Add(bgGradientFields);
         backgroundEnabled.IsCheckedChanged += (_, _) => { background.Enabled = backgroundEnabled.IsChecked == true; backgroundFields.IsVisible = background.Enabled; changed(); };
         backgroundPanel.Children.Add(backgroundEnabled); backgroundPanel.Children.Add(backgroundFields); backgroundPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить подложку", language), () => { current.Background = new(); ChangedAndRebuild(); })); Children.Add(Section("Подложка", backgroundPanel));
+        var raster = current.RasterEffects ??= new();
+        var rasterPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
+        var blurEnabled = new CheckBox { Content = StudioLocalization.Text("Размытие текста", language), IsChecked = raster.BlurEnabled };
+        var blurFields = new StackPanel { Spacing = 6, IsVisible = raster.BlurEnabled };
+        blurFields.Children.Add(Number("Радиус размытия", raster.BlurRadius, 0, 100, value => raster.BlurRadius = value));
+        blurEnabled.IsCheckedChanged += (_, _) => { raster.BlurEnabled = blurEnabled.IsChecked == true; blurFields.IsVisible = raster.BlurEnabled; changed(); };
+        var pixelEnabled = new CheckBox { Content = StudioLocalization.Text("Пикселизация текста", language), IsChecked = raster.PixelationEnabled };
+        var pixelFields = new StackPanel { Spacing = 6, IsVisible = raster.PixelationEnabled };
+        pixelFields.Children.Add(Number("Размер пикселя", raster.PixelSize, 2, 64, value => raster.PixelSize = (int)Math.Round(value)));
+        pixelEnabled.IsCheckedChanged += (_, _) => { raster.PixelationEnabled = pixelEnabled.IsChecked == true; pixelFields.IsVisible = raster.PixelationEnabled; changed(); };
+        var chromaticEnabled = new CheckBox { Content = StudioLocalization.Text("Смещение RGB", language), IsChecked = raster.ChromaticEnabled };
+        var chromaticFields = new StackPanel { Spacing = 6, IsVisible = raster.ChromaticEnabled };
+        chromaticFields.Children.Add(Number("Смещение каналов", raster.ChromaticOffset, 0, 64, value => raster.ChromaticOffset = (int)Math.Round(value)));
+        chromaticEnabled.IsCheckedChanged += (_, _) => { raster.ChromaticEnabled = chromaticEnabled.IsChecked == true; chromaticFields.IsVisible = raster.ChromaticEnabled; changed(); };
+        var metallicEnabled = new CheckBox { Content = StudioLocalization.Text("Металлический эффект", language), IsChecked = raster.MetallicEnabled };
+        var metallicFields = new StackPanel { Spacing = 6, IsVisible = raster.MetallicEnabled };
+        metallicFields.Children.Add(ColorField("Цвет металла (#AARRGGBB)", raster.MetallicColor, value => raster.MetallicColor = value));
+        metallicFields.Children.Add(Number("Интенсивность, %", raster.MetallicStrength * 100, 0, 100, value => raster.MetallicStrength = value / 100));
+        metallicEnabled.IsCheckedChanged += (_, _) => { raster.MetallicEnabled = metallicEnabled.IsChecked == true; metallicFields.IsVisible = raster.MetallicEnabled; changed(); };
+        var glossEnabled = new CheckBox { Content = StudioLocalization.Text("Глянец", language), IsChecked = raster.GlossEnabled };
+        var glossFields = new StackPanel { Spacing = 6, IsVisible = raster.GlossEnabled };
+        glossFields.Children.Add(Number("Интенсивность, %", raster.GlossStrength * 100, 0, 100, value => raster.GlossStrength = value / 100));
+        glossEnabled.IsCheckedChanged += (_, _) => { raster.GlossEnabled = glossEnabled.IsChecked == true; glossFields.IsVisible = raster.GlossEnabled; changed(); };
+        Control ReliefFields(string label, TextRelief relief)
+        {
+            var group = new StackPanel { Spacing = 6 };
+            var enabled = new CheckBox { Content = StudioLocalization.Text(label, language), IsChecked = relief.Enabled };
+            var values = new StackPanel { Spacing = 6, IsVisible = relief.Enabled };
+            values.Children.Add(Number("Интенсивность, %", relief.Strength * 100, 0, 100, value => relief.Strength = value / 100));
+            values.Children.Add(Number("Глубина", relief.Depth, 0, 30, value => relief.Depth = value));
+            values.Children.Add(Number("Угол, °", relief.Angle, -360, 360, value => relief.Angle = value));
+            enabled.IsCheckedChanged += (_, _) => { relief.Enabled = enabled.IsChecked == true; values.IsVisible = relief.Enabled; changed(); };
+            group.Children.Add(enabled); group.Children.Add(values); return group;
+        }
+        rasterPanel.Children.Add(blurEnabled); rasterPanel.Children.Add(blurFields); rasterPanel.Children.Add(pixelEnabled); rasterPanel.Children.Add(pixelFields); rasterPanel.Children.Add(chromaticEnabled); rasterPanel.Children.Add(chromaticFields);
+        rasterPanel.Children.Add(metallicEnabled); rasterPanel.Children.Add(metallicFields); rasterPanel.Children.Add(glossEnabled); rasterPanel.Children.Add(glossFields);
+        rasterPanel.Children.Add(ReliefFields("Тиснение", raster.Emboss ??= new())); rasterPanel.Children.Add(ReliefFields("Вдавленный текст", raster.Inset ??= new()));
+        rasterPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить дополнительные эффекты", language), () => { current.RasterEffects = new(); ChangedAndRebuild(); }));
+        Children.Add(Section("Дополнительные эффекты", rasterPanel));
         Children.Add(Section("Положение и поворот", placement));
-        var resetEffects = ActionButton(StudioLocalization.Text("Сбросить все эффекты", language), () => { current.Outlines.Clear(); current.Shadow = new(); current.Glow = new(); current.Gradient = new(); current.Background = new(); current.Extrusion = new(); ChangedAndRebuild(); });
+        var resetEffects = ActionButton(StudioLocalization.Text("Сбросить все эффекты", language), () => { current.Outlines.Clear(); current.Shadow = new(); current.Glow = new(); current.Gradient = new(); current.Background = new(); current.Extrusion = new(); current.RasterEffects = new(); ChangedAndRebuild(); });
         resetEffects.IsEnabled = !current.IsLocked; Children.Add(resetEffects);
         StudioLocalization.Capture(this);
         StudioLocalization.Apply(this, language);

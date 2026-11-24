@@ -72,6 +72,31 @@ public sealed class TextBackground
     public TextGradient Gradient { get; set; } = new();
 }
 
+public sealed class TextRelief
+{
+    public bool Enabled { get; set; }
+    public double Strength { get; set; } = .65;
+    public double Depth { get; set; } = 3;
+    public double Angle { get; set; } = 45;
+}
+
+public sealed class TextRasterEffects
+{
+    public bool BlurEnabled { get; set; }
+    public double BlurRadius { get; set; } = 4;
+    public bool PixelationEnabled { get; set; }
+    public int PixelSize { get; set; } = 6;
+    public bool ChromaticEnabled { get; set; }
+    public int ChromaticOffset { get; set; } = 4;
+    public bool MetallicEnabled { get; set; }
+    public string MetallicColor { get; set; } = "#FFB7C8DA";
+    public double MetallicStrength { get; set; } = .8;
+    public bool GlossEnabled { get; set; }
+    public double GlossStrength { get; set; } = .6;
+    public TextRelief Emboss { get; set; } = new();
+    public TextRelief Inset { get; set; } = new();
+}
+
 public sealed class TextOutline
 {
     public bool Enabled { get; set; }
@@ -120,12 +145,15 @@ public sealed class TextLayer : System.ComponentModel.INotifyPropertyChanged
     public double StretchX { get; set; } = 1;
     public double StretchY { get; set; } = 1;
     public double Skew { get; set; }
+    // Total angle of the baseline arc, in degrees; zero is a straight line.
+    public double Curvature { get; set; }
     public List<TextOutline> Outlines { get; set; } = [];
     public TextShadow Shadow { get; set; } = new();
     public TextGlow Glow { get; set; } = new();
     public TextGradient Gradient { get; set; } = new();
     public TextExtrusion Extrusion { get; set; } = new();
     public TextBackground Background { get; set; } = new();
+    public TextRasterEffects RasterEffects { get; set; } = new();
     public bool IsVisible { get; set; } = true;
     public bool IsLocked { get; set; }
 }
