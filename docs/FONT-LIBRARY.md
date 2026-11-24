@@ -8,9 +8,12 @@ style and declared writing-system subsets. Every family includes its original
 `OFL.txt`; no font file is modified. Metadata declares Cyrillic support for 60
 families. Font files total 367,258,164 bytes before compression.
 
-Run `eng/prepare-fonts.ps1` to fetch the pinned source and verify every font and
-license. The packaging script runs it automatically and puts the catalog under
-`fonts/`. Nothing is downloaded at application startup or during export.
+The desktop build and publish steps run `eng/prepare-fonts.ps1` when the output
+catalog is missing. The script fetches the pinned source if necessary, verifies
+every font and license, and puts the catalog under `fonts/`. PowerShell is
+required for a first build (`pwsh` on macOS and Linux). The packaging script
+also verifies the catalog. Nothing is downloaded at application startup or
+during export.
 Projects refer to catalog-relative identifiers; missing, unlisted or modified
 selected font files produce an error instead of silently selecting a different
 face. System fonts remain available.

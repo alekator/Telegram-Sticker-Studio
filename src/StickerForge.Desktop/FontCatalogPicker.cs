@@ -47,6 +47,16 @@ internal sealed class FontCatalogPicker : StackPanel
         if (catalog is null) Children.Add(new TextBlock { Text = Tr("Встроенная библиотека шрифтов отсутствует.", "Bundled font library is unavailable."), TextWrapping = TextWrapping.Wrap, Foreground = theme.Secondary });
         scriptValues = catalog?.Families.SelectMany(f => f.Subsets).Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray() ?? [];
         scripts.ItemsSource = new[] { Tr("Все письменности", "All scripts") }.Concat(scriptValues).ToArray(); scripts.SelectedIndex = 0; Children.Add(scripts);
+        list.Background = theme.Panel;
+        list.Foreground = theme.Text;
+        list.Resources["SystemControlHighlightAccentBrush"] = theme.Accent;
+        list.Resources["SystemControlHighlightListAccentLowBrush"] = theme.Selected;
+        list.Resources["SystemControlHighlightListAccentMediumBrush"] = theme.Selected;
+        list.Resources["SystemControlHighlightListAccentHighBrush"] = theme.Accent;
+        list.Resources["SystemControlHighlightListLowBrush"] = theme.Surface;
+        list.Resources["SystemControlHighlightListMediumBrush"] = theme.Selected;
+        list.Resources["SystemControlFocusVisualPrimaryBrush"] = theme.Accent;
+        list.Resources["SystemControlFocusVisualSecondaryBrush"] = theme.Panel;
         list.ItemsPanel = new FuncTemplate<Panel?>(() => new VirtualizingStackPanel());
         list.ItemTemplate = new FuncDataTemplate<Choice>((choice, _) => choice is null ? new TextBlock() : MakeRow(choice, theme));
         list.SelectionChanged += (_, _) =>
