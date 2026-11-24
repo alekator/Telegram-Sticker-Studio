@@ -16,6 +16,9 @@ public sealed class BundledToolTests
     public async Task PackageToolsWorkWithoutPathAndExportMixedMedia()
     {
         var package = Path.GetFullPath(Environment.GetEnvironmentVariable("STICKERFORGE_PACKAGE_DIR")!);
+        var executable = Path.Combine(package, "StickerForge.Desktop.exe");
+        Assert.True(File.Exists(executable));
+        Assert.StartsWith("1.0.0", FileVersionInfo.GetVersionInfo(executable).ProductVersion);
         var location = FfmpegLocator.FindVerified(package, Path.Combine(package, "unused"), FfmpegLocator.ReleaseHashes);
         Assert.NotNull(location); Assert.Equal(package, location.Source);
         var service = FfmpegLocator.CreateForDirectory(package, Path.Combine(package, "unused"), FfmpegLocator.ReleaseHashes);

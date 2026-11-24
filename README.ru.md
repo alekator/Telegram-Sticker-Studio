@@ -23,11 +23,11 @@
 
 ## Скачать и запустить
 
-[Открыть сборки Windows x64 в GitHub Actions](https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/windows-package.yml). Выберите успешный запуск **Windows standalone package** и скачайте артефакт `StickerForge-Studio-Windows-x64`. Для скачивания может потребоваться вход в GitHub; срок хранения артефактов ограничен.
+[Скачать StickerForge Studio v1.0.0 для Windows x64](https://github.com/alekator/Telegram-Sticker-Studio/releases/download/v1.0.0/StickerForge-Studio-v1.0.0-Windows-x64.zip). Промежуточные сборки доступны в [GitHub Actions](https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/windows-package.yml).
 
 Распакуйте ZIP целиком, откройте папку `StickerForge-Studio` и запустите `StickerForge.Desktop.exe`. В состав входят .NET, FFmpeg и FFprobe; устанавливать их отдельно и настраивать PATH не нужно.
 
-**Статус распространения:** сборка предназначена для проверки. Полный инвентарь лицензий и материалы для перелинковки закреплённой сборки FFmpeg ещё не подтверждены; постоянный публичный релиз не опубликован. Подробности — в [описании поставки](docs/WINDOWS-DISTRIBUTION.md).
+Полный инвентарь лицензий и материалы для перелинковки статической сборки FFmpeg ещё не подтверждены; подробности — в [описании поставки](docs/WINDOWS-DISTRIBUTION.md).
 
 ## Использование и форматы
 

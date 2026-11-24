@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$FfmpegArchive,
     [string]$OutputDirectory = "artifacts/windows-package",
-    [string]$ZipPath = "artifacts/StickerForge-Studio-Windows-x64.zip"
+    [string]$ZipPath = "artifacts/StickerForge-Studio-v1.0.0-Windows-x64.zip"
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -33,9 +33,17 @@ $notice = Join-Path $package 'licenses'
 New-Item -ItemType Directory -Force -Path $notice | Out-Null
 Copy-Item -LiteralPath (Join-Path $upstream 'LICENSE.txt') -Destination (Join-Path $notice 'FFmpeg-LGPL-3.0.txt') -Force
 Copy-Item -Path (Join-Path $root 'licenses/*.txt') -Destination $notice -Force
+$runtimeVersion = ((Get-Item -LiteralPath (Join-Path $package 'hostfxr.dll')).VersionInfo.ProductVersion -split ' ')[0]
+$nugetRoot = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $env:USERPROFILE '.nuget/packages' }
+$runtimePack = Join-Path $nugetRoot "microsoft.netcore.app.runtime.win-x64/$runtimeVersion"
+Copy-Item -LiteralPath (Join-Path $runtimePack 'LICENSE.TXT') -Destination (Join-Path $notice 'dotnet-LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $runtimePack 'THIRD-PARTY-NOTICES.TXT') -Destination (Join-Path $notice 'dotnet-THIRD-PARTY-NOTICES.txt') -Force
+$buildConfiguration = & (Join-Path $tools 'ffmpeg.exe') -v quiet -buildconf
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the bundled FFmpeg build configuration.' }
+$buildConfiguration | Set-Content -LiteralPath (Join-Path $notice 'FFmpeg-BUILD-CONFIG.txt') -Encoding UTF8
 Copy-Item -LiteralPath (Join-Path $root 'docs/LICENSING.md') -Destination (Join-Path $notice 'PROJECT-LICENSING.md') -Force
-Copy-Item -LiteralPath (Join-Path $root 'docs/WINDOWS-DISTRIBUTION.md') -Destination (Join-Path $package 'THIRD-PARTY-NOTICES.md') -Force
-foreach ($required in @('StickerForge.Desktop.exe', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll', 'libSkiaSharp.dll', 'standalone-windows.txt', 'tools/ffmpeg/windows/x64/ffmpeg.exe', 'tools/ffmpeg/windows/x64/ffprobe.exe', 'licenses/FFmpeg-LGPL-3.0.txt', 'THIRD-PARTY-NOTICES.md')) {
+Copy-Item -LiteralPath (Join-Path $root 'docs/WINDOWS-DISTRIBUTION.md') -Destination (Join-Path $notice 'THIRD-PARTY-NOTICES.md') -Force
+foreach ($required in @('StickerForge.Desktop.exe', 'hostfxr.dll', 'hostpolicy.dll', 'coreclr.dll', 'libSkiaSharp.dll', 'standalone-windows.txt', 'tools/ffmpeg/windows/x64/ffmpeg.exe', 'tools/ffmpeg/windows/x64/ffprobe.exe', 'licenses/FFmpeg-LGPL-3.0.txt', 'licenses/Avalonia-MIT.txt', 'licenses/SkiaSharp-MIT.txt', 'licenses/dotnet-LICENSE.txt', 'licenses/dotnet-THIRD-PARTY-NOTICES.txt', 'licenses/THIRD-PARTY-NOTICES.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $package $required) -PathType Leaf)) { throw "Package missing $required" }
 }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -54,7 +62,7 @@ try {
 $contents = [IO.Compression.ZipFile]::OpenRead($zip)
 try {
     $names = @($contents.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($required in @('StickerForge.Desktop.exe', 'hostfxr.dll', 'coreclr.dll', 'tools/ffmpeg/windows/x64/ffmpeg.exe', 'tools/ffmpeg/windows/x64/ffprobe.exe', 'licenses/FFmpeg-LGPL-3.0.txt', 'THIRD-PARTY-NOTICES.md')) {
+    foreach ($required in @('StickerForge.Desktop.exe', 'hostfxr.dll', 'coreclr.dll', 'tools/ffmpeg/windows/x64/ffmpeg.exe', 'tools/ffmpeg/windows/x64/ffprobe.exe', 'licenses/FFmpeg-LGPL-3.0.txt', 'licenses/FFmpeg-BUILD-CONFIG.txt', 'licenses/Avalonia-MIT.txt', 'licenses/SkiaSharp-MIT.txt', 'licenses/dotnet-LICENSE.txt', 'licenses/dotnet-THIRD-PARTY-NOTICES.txt', 'licenses/THIRD-PARTY-NOTICES.md')) {
         if ("StickerForge-Studio/$required" -notin $names) { throw "ZIP missing $required" }
     }
     if ($names | Where-Object { $_ -notlike 'StickerForge-Studio/*' -or $_ -like '*.pdb' }) { throw 'ZIP contains unexpected entries.' }

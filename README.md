@@ -5,7 +5,7 @@
 <p align="center">English · <a href="README.ru.md">Русский</a></p>
 <p align="center">
   <a href="https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/ci.yml"><img src="https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/ci.yml/badge.svg" alt="Build and test"></a>
-  <img src="https://img.shields.io/badge/version-development-318cf4" alt="Version: development">
+  <img src="https://img.shields.io/badge/version-1.0.0-318cf4" alt="Version: 1.0.0">
   <img src="https://img.shields.io/badge/platform-Windows%20x64-318cf4" alt="Windows x64">
 </p>
 
@@ -45,11 +45,9 @@ Captured from the current application in English using the included logo as samp
 
 ## Download
 
-### [Download a Windows x64 build from GitHub Actions](https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/windows-package.yml)
+### [Download StickerForge Studio v1.0.0 for Windows x64](https://github.com/alekator/Telegram-Sticker-Studio/releases/download/v1.0.0/StickerForge-Studio-v1.0.0-Windows-x64.zip)
 
-Open a successful **Windows standalone package** run and download the `StickerForge-Studio-Windows-x64` artifact. GitHub may require you to sign in, and workflow artifacts expire. The artifact contains `StickerForge-Studio-Windows-x64.zip`; extract it, then open the `StickerForge-Studio` folder.
-
-**Distribution status:** these are evaluation builds, not a public release. The package includes FFmpeg and its notices, but the full license inventory and relinking materials for the pinned FFmpeg build have not yet been verified. See [Windows distribution notes](docs/WINDOWS-DISTRIBUTION.md). No permanent GitHub Release has been published.
+Extract the ZIP, then open the `StickerForge-Studio` folder. Development builds are also available from [GitHub Actions](https://github.com/alekator/Telegram-Sticker-Studio/actions/workflows/windows-package.yml).
 
 ## Getting Started
 
@@ -99,6 +97,4 @@ Video import and export from a source build require FFmpeg and FFprobe. The Wind
 
 ## License & Third-Party Components
 
-No license for the StickerForge Studio source code has been specified in this repository. Do not assume a source-code license from the fact that the application is free to use.
-
-The Windows package contains .NET, Avalonia, SkiaSharp, FFmpeg, libvpx, and other components under their respective licenses. FFmpeg is distributed under LGPL terms in the selected build; its source and additional notices are linked in the [Windows distribution notes](docs/WINDOWS-DISTRIBUTION.md). The complete inventory and relinking materials for the pinned FFmpeg binary remain to be verified before a public release. See also [dependency and licensing notes](docs/LICENSING.md).
+The app includes FFmpeg and other third-party components; their notices are in the archive's `licenses` folder and the [Windows distribution notes](docs/WINDOWS-DISTRIBUTION.md). The complete inventory and relinking materials for the static FFmpeg build have not yet been verified. No source-code license for StickerForge Studio has been specified in this repository.
