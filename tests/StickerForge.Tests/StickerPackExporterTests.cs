@@ -7,6 +7,38 @@ namespace StickerForge.Tests;
 public sealed class StickerPackExporterTests : IDisposable
 {
     [Fact]
+    public void InnerGlowColorsGlyphEdgesWithoutAddingAnOuterGlow()
+    {
+        var layer = new TextLayer { Text = "TEXT", FontSize = 100, Color = "#FFFFFFFF" };
+        using var originalImage = TextLayerRenderer.RenderOverlay([layer]); using var original = SKBitmap.FromImage(originalImage);
+        layer.Glow = new() { InnerEnabled = true, InnerColor = "#FFFF0000", InnerRadius = 4, InnerOpacity = 1 };
+        using var effectImage = TextLayerRenderer.RenderOverlay([layer]); using var effect = SKBitmap.FromImage(effectImage);
+        var colored = 0; var escaped = 0; byte maxEscapedAlpha = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
+        {
+            var before = original.GetPixel(x, y); var after = effect.GetPixel(x, y);
+            if (before.Alpha > 200 && after.Red > 200 && after.Green < 150) colored++;
+            if (before.Alpha == 0 && after.Alpha > 10) { escaped++; maxEscapedAlpha = Math.Max(maxEscapedAlpha, after.Alpha); }
+        }
+        Assert.True(colored > 10); Assert.True(escaped == 0, $"Escaped pixels: {escaped}; maximum alpha: {maxEscapedAlpha}.");
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BackgroundAndExtrusionAreRenderedInTheSharedOverlay(bool perLine)
+    {
+        var layer = new TextLayer { Text = "HI\nWORLD", FontSize = 60, Background = new() { Enabled = true, PerLine = perLine, Color = "#FF00FF00", PaddingX = 12, PaddingY = 5 }, Extrusion = new() { Enabled = true, Color = "#FFFF0000", Depth = 12, Angle = 0, Shading = 0 } };
+        using var image = TextLayerRenderer.RenderOverlay([layer]); using var bitmap = SKBitmap.FromImage(image);
+        var green = 0; var red = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++)
+        {
+            var p = bitmap.GetPixel(x, y);
+            if (p.Alpha > 200 && p.Green > 200 && p.Red < 40) green++;
+            if (p.Alpha > 200 && p.Red > 200 && p.Green < 40) red++;
+        }
+        Assert.True(green > 100); Assert.True(red > 20);
+    }
+    [Fact]
     public void GradientAndGlowChangeTheSharedTextOverlay()
     {
         var layer = new TextLayer { Text = "STICKER", FontSize = 72, Color = "#FFFFFFFF" };

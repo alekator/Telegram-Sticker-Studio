@@ -40,6 +40,36 @@ public sealed class TextGlow
     public string Color { get; set; } = "#FF078BFA";
     public double Opacity { get; set; } = .8;
     public double Radius { get; set; } = 8;
+    public double Intensity { get; set; } = 1;
+    public bool InnerEnabled { get; set; }
+    public string InnerColor { get; set; } = "#FFFFFFFF";
+    public double InnerOpacity { get; set; } = .8;
+    public double InnerRadius { get; set; } = 4;
+    public double InnerIntensity { get; set; } = 1;
+}
+
+public sealed class TextExtrusion
+{
+    public bool Enabled { get; set; }
+    public string Color { get; set; } = "#FF173558";
+    public double Opacity { get; set; } = 1;
+    public double Depth { get; set; } = 8;
+    public double Angle { get; set; } = 45;
+    public double Shading { get; set; } = .35;
+}
+
+public sealed class TextBackground
+{
+    public bool Enabled { get; set; }
+    public bool PerLine { get; set; }
+    public string Color { get; set; } = "#CC000000";
+    public double Opacity { get; set; } = 1;
+    public double PaddingX { get; set; } = 10;
+    public double PaddingY { get; set; } = 6;
+    public double Radius { get; set; } = 8;
+    public string BorderColor { get; set; } = "#FFFFFFFF";
+    public double BorderWidth { get; set; }
+    public TextGradient Gradient { get; set; } = new();
 }
 
 public sealed class TextOutline
@@ -94,6 +124,8 @@ public sealed class TextLayer : System.ComponentModel.INotifyPropertyChanged
     public TextShadow Shadow { get; set; } = new();
     public TextGlow Glow { get; set; } = new();
     public TextGradient Gradient { get; set; } = new();
+    public TextExtrusion Extrusion { get; set; } = new();
+    public TextBackground Background { get; set; } = new();
     public bool IsVisible { get; set; } = true;
     public bool IsLocked { get; set; }
 }

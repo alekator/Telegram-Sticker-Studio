@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Controls.Presenters;
 using Avalonia.Media;
 using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
 using Avalonia.Themes.Fluent;
 using Avalonia.Input;
 using System.Text.Json;
@@ -27,6 +28,37 @@ public sealed class WindowLayoutTestApp : Application
 [Collection("Avalonia Headless")]
 public sealed class WindowLayoutTests
 {
+    [Fact]
+    public async Task ShadowDirectionAndDistanceStaySynchronizedWithOffsets()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-shadow-ui-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(() =>
+            {
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "layout.json")), new UiPreferencesStore(Path.Combine(directory, "ui.json")), new FontPreferencesStore(Path.Combine(directory, "fonts.json")));
+                window.Show();
+                try
+                {
+                    var panel = (Control)typeof(MainWindow).GetField("textEditor", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var layer = new StickerForge.Core.TextLayer { Text = "Hello", Shadow = new() { Enabled = true, OffsetX = 0, OffsetY = 0 } };
+                    var sticker = new StickerForge.Core.StickerItem { SourcePath = "unused.png", TextLayers = [layer] };
+                    panel.GetType().GetMethod("SetItem")!.Invoke(panel, [sticker]);
+                    var section = panel.GetLogicalDescendants().OfType<Expander>().Single(x => (string?)x.Header == "Тень"); section.IsExpanded = true;
+                    NumericUpDown Field(string label) => section.GetLogicalDescendants().OfType<Grid>().Single(g => g.Children.OfType<TextBlock>().Any(t => t.Text == label)).Children.OfType<NumericUpDown>().Single();
+                    Field("Угол, °").Value = 90;
+                    Field("Расстояние").Value = 10;
+                    Assert.InRange(layer.Shadow.OffsetX, -.001, .001); Assert.InRange(layer.Shadow.OffsetY, 9.999, 10.001);
+                    Field("Смещение X").Value = 10;
+                    Assert.InRange((double)Field("Расстояние").Value!, 14.13, 14.15);
+                }
+                finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
+                return true;
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
     [FontBundleFact]
     public async Task CatalogSearchSelectsBundledFontAndPersistsFavorites()
     {

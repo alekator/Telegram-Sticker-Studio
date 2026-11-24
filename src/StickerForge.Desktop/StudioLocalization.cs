@@ -51,6 +51,12 @@ internal static class StudioLocalization
         , ["Выбрать цвет"] = "Choose color"
         , ["Снаружи"] = "Outside", ["По центру обводки"] = "Centered", ["Внутри"] = "Inside", ["Удалить обводку"] = "Remove outline", ["Добавить обводку"] = "Add outline"
         , ["Не удалось получить цвет кадра."] = "Could not sample the frame color.", ["Цвет выбран."] = "Color selected.", ["Нажмите на изображение, чтобы выбрать цвет."] = "Click the image to sample a color.", ["Выбор цвета отменён."] = "Color sampling cancelled."
+        , ["Объём"] = "Extrusion", ["Включить объём"] = "Enable extrusion", ["Цвет объёма (#AARRGGBB)"] = "Extrusion color (#AARRGGBB)", ["Глубина"] = "Depth", ["Затенение, %"] = "Shading, %"
+        , ["Подложка"] = "Background", ["Включить подложку"] = "Enable background", ["Отдельно для каждой строки"] = "Separate lines", ["Цвет подложки (#AARRGGBB)"] = "Background color (#AARRGGBB)", ["Отступ X"] = "Horizontal padding", ["Отступ Y"] = "Vertical padding", ["Скругление"] = "Corner radius", ["Цвет границы (#AARRGGBB)"] = "Border color (#AARRGGBB)", ["Толщина границы"] = "Border width"
+        , ["Готовые стили"] = "Text styles", ["Удалить стиль"] = "Delete style", ["Сохранить стиль"] = "Save style"
+        , ["Сбросить обводку"] = "Reset outline", ["Сбросить тень"] = "Reset shadow", ["Сбросить свечение"] = "Reset glow", ["Сбросить градиент"] = "Reset gradient", ["Сбросить объём"] = "Reset extrusion", ["Сбросить подложку"] = "Reset background", ["Сбросить все эффекты"] = "Reset all effects"
+        , ["Расстояние"] = "Distance"
+        , ["Внутреннее свечение"] = "Inner glow", ["Интенсивность, %"] = "Intensity, %"
     };
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, LocalizedKey> TooltipKeys = new();
     public static string Text(string text, string language) => language == "en" && English.TryGetValue(text, out var value) ? value : text;

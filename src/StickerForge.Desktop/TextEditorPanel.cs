@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Data;
 using SkiaSharp;
 using StickerForge.Core;
@@ -14,15 +15,18 @@ namespace StickerForge.Desktop;
 /// <summary>Controls text-layer state without owning the project or the canvas.</summary>
 internal sealed class TextEditorPanel : StackPanel
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> StylePreviewCache = new();
     private readonly Action changed;
     private readonly Action selectionChanged;
     private readonly StudioTheme theme;
     private readonly FontPreferencesStore fontPreferences;
+    private readonly TextStyleStore styleStore = new();
     private StickerItem? item;
     private TextLayer? selected;
     private bool updating;
     private TextBox? textField;
     private string language = "ru";
+    private readonly Dictionary<string, bool> expandedSections = new(StringComparer.Ordinal);
 
     public TextLayer? Selected => selected;
     public Action? LayerAdded { get; set; }
@@ -159,6 +163,40 @@ internal sealed class TextEditorPanel : StackPanel
         fields.Children.Add(Number("Растяжение Y, %", current.StretchY * 100, 10, 1000, value => current.StretchY = value / 100));
         fields.Children.Add(Number("Наклон, %", current.Skew * 100, -200, 200, value => current.Skew = value / 100));
         Children.Add(Section("Текст", fields));
+        var stylesPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
+        var styleError = new TextBlock { Foreground = theme.Secondary, TextWrapping = TextWrapping.Wrap };
+        var presetsPanel = new WrapPanel();
+        foreach (var preset in TextStylePresets.Create()) presetsPanel.Children.Add(StyleButton(preset, current));
+        stylesPanel.Children.Add(presetsPanel);
+        var custom = styleStore.Load();
+        var customPanel = new StackPanel { Spacing = 4 };
+        void SaveStyles()
+        {
+            try { styleStore.Save(custom); styleError.Text = ""; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { styleError.Text = language == "en" ? "Could not save styles." : "Не удалось сохранить стили."; }
+        }
+        void RefreshCustomStyles()
+        {
+            customPanel.Children.Clear();
+            foreach (var style in custom.ToArray())
+            {
+                var row = new StackPanel { Spacing = 4 };
+                var styleName = new TextBox { Text = style.Name, PlaceholderText = language == "en" ? "Style name" : "Название стиля" };
+                styleName.LostFocus += (_, _) => { var nameValue = styleName.Text?.Trim(); if (!string.IsNullOrEmpty(nameValue)) { style.Name = nameValue; SaveStyles(); } else styleName.Text = style.Name; };
+                row.Children.Add(styleName); var actionsRow = new WrapPanel(); actionsRow.Children.Add(StyleButton(style, current));
+                actionsRow.Children.Add(ActionButton(StudioLocalization.Text("Удалить стиль", language), () => { custom.Remove(style); SaveStyles(); RefreshCustomStyles(); }));
+                row.Children.Add(actionsRow); customPanel.Children.Add(row);
+            }
+        }
+        RefreshCustomStyles(); stylesPanel.Children.Add(customPanel);
+        var newStyleName = new TextBox { PlaceholderText = language == "en" ? "New style name" : "Название нового стиля" }; stylesPanel.Children.Add(newStyleName);
+        stylesPanel.Children.Add(ActionButton(StudioLocalization.Text("Сохранить стиль", language), () =>
+        {
+            var styleName = newStyleName.Text?.Trim();
+            if (string.IsNullOrEmpty(styleName)) { styleError.Text = language == "en" ? "Enter a style name." : "Введите название стиля."; return; }
+            custom.Add(TextStyle.Capture(current, styleName)); SaveStyles(); RefreshCustomStyles(); newStyleName.Text = "";
+        }));
+        stylesPanel.Children.Add(styleError); Children.Add(Section("Готовые стили", stylesPanel));
         var outlines = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
         current.Outlines ??= [];
         var outlineList = new StackPanel { Spacing = 6 };
@@ -184,6 +222,7 @@ internal sealed class TextEditorPanel : StackPanel
         }
         RefreshOutlines(); outlines.Children.Add(outlineList);
         outlines.Children.Add(ActionButton(StudioLocalization.Text("Добавить обводку", language), () => { current.Outlines.Add(new() { Enabled = true }); RefreshOutlines(); changed(); }));
+        outlines.Children.Add(ActionButton(StudioLocalization.Text("Сбросить обводку", language), () => { current.Outlines.Clear(); ChangedAndRebuild(); }));
         Children.Add(Section("Обводка", outlines));
         var shadow = current.Shadow ??= new();
         var shadowPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
@@ -191,11 +230,42 @@ internal sealed class TextEditorPanel : StackPanel
         var shadowFields = new StackPanel { Spacing = 6, IsVisible = shadow.Enabled };
         shadowFields.Children.Add(ColorField("Цвет тени (#AARRGGBB)", shadow.Color, value => shadow.Color = value));
         shadowFields.Children.Add(Number("Прозрачность, %", shadow.Opacity * 100, 0, 100, value => shadow.Opacity = value / 100));
-        shadowFields.Children.Add(Number("Смещение X", shadow.OffsetX, -512, 512, value => shadow.OffsetX = value));
-        shadowFields.Children.Add(Number("Смещение Y", shadow.OffsetY, -512, 512, value => shadow.OffsetY = value));
+        Control? shadowX = null, shadowY = null, shadowAngle = null, shadowDistance = null;
+        var shadowDirection = Math.Atan2(shadow.OffsetY, shadow.OffsetX) * 180 / Math.PI;
+        void SyncNumber(Control? control, double value)
+        {
+            if (control is not Grid grid) return;
+            var oldUpdating = updating; updating = true;
+            try
+            {
+                var input = grid.Children.OfType<NumericUpDown>().Single();
+                var slider = grid.Children.OfType<Slider>().Single();
+                var next = Math.Clamp(value, (double)input.Minimum, (double)input.Maximum);
+                input.Value = (decimal)next; slider.Value = next;
+            }
+            finally { updating = oldUpdating; }
+        }
+        void UpdatePolar()
+        {
+            var distance = Math.Sqrt(shadow.OffsetX * shadow.OffsetX + shadow.OffsetY * shadow.OffsetY);
+            if (distance > .000001) shadowDirection = Math.Atan2(shadow.OffsetY, shadow.OffsetX) * 180 / Math.PI;
+            SyncNumber(shadowAngle, shadowDirection); SyncNumber(shadowDistance, distance);
+        }
+        void UpdateCartesian(double angle, double distance)
+        {
+            var radians = angle * Math.PI / 180;
+            shadow.OffsetX = Math.Clamp(Math.Cos(radians) * distance, -512, 512);
+            shadow.OffsetY = Math.Clamp(Math.Sin(radians) * distance, -512, 512);
+            SyncNumber(shadowX, shadow.OffsetX); SyncNumber(shadowY, shadow.OffsetY); UpdatePolar();
+        }
+        shadowX = Number("Смещение X", shadow.OffsetX, -512, 512, value => { shadow.OffsetX = value; UpdatePolar(); });
+        shadowY = Number("Смещение Y", shadow.OffsetY, -512, 512, value => { shadow.OffsetY = value; UpdatePolar(); });
+        shadowAngle = Number("Угол, °", shadowDirection, -180, 180, value => { shadowDirection = value; UpdateCartesian(value, Math.Sqrt(shadow.OffsetX * shadow.OffsetX + shadow.OffsetY * shadow.OffsetY)); });
+        shadowDistance = Number("Расстояние", Math.Sqrt(shadow.OffsetX * shadow.OffsetX + shadow.OffsetY * shadow.OffsetY), 0, 724, value => UpdateCartesian(shadowDirection, value));
+        shadowFields.Children.Add(shadowX); shadowFields.Children.Add(shadowY); shadowFields.Children.Add(shadowAngle); shadowFields.Children.Add(shadowDistance);
         shadowFields.Children.Add(Number("Размытие", shadow.Blur, 0, 100, value => shadow.Blur = value));
         shadowEnabled.IsCheckedChanged += (_, _) => { shadow.Enabled = shadowEnabled.IsChecked == true; shadowFields.IsVisible = shadow.Enabled; changed(); };
-        shadowPanel.Children.Add(shadowEnabled); shadowPanel.Children.Add(shadowFields); Children.Add(Section("Тень", shadowPanel));
+        shadowPanel.Children.Add(shadowEnabled); shadowPanel.Children.Add(shadowFields); shadowPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить тень", language), () => { current.Shadow = new(); ChangedAndRebuild(); })); Children.Add(Section("Тень", shadowPanel));
         var glow = current.Glow ??= new();
         var glowPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
         var glowEnabled = new CheckBox { Content = StudioLocalization.Text("Внешнее свечение", language), IsChecked = glow.Enabled };
@@ -203,8 +273,16 @@ internal sealed class TextEditorPanel : StackPanel
         glowFields.Children.Add(ColorField("Цвет свечения (#AARRGGBB)", glow.Color, value => glow.Color = value));
         glowFields.Children.Add(Number("Прозрачность, %", glow.Opacity * 100, 0, 100, value => glow.Opacity = value / 100));
         glowFields.Children.Add(Number("Радиус", glow.Radius, 0, 100, value => glow.Radius = value));
+        glowFields.Children.Add(Number("Интенсивность, %", glow.Intensity * 100, 0, 500, value => glow.Intensity = value / 100));
         glowEnabled.IsCheckedChanged += (_, _) => { glow.Enabled = glowEnabled.IsChecked == true; glowFields.IsVisible = glow.Enabled; changed(); };
-        glowPanel.Children.Add(glowEnabled); glowPanel.Children.Add(glowFields); Children.Add(Section("Свечение", glowPanel));
+        var innerGlowEnabled = new CheckBox { Content = StudioLocalization.Text("Внутреннее свечение", language), IsChecked = glow.InnerEnabled };
+        var innerGlowFields = new StackPanel { Spacing = 6, IsVisible = glow.InnerEnabled };
+        innerGlowFields.Children.Add(ColorField("Цвет свечения (#AARRGGBB)", glow.InnerColor, value => glow.InnerColor = value));
+        innerGlowFields.Children.Add(Number("Прозрачность, %", glow.InnerOpacity * 100, 0, 100, value => glow.InnerOpacity = value / 100));
+        innerGlowFields.Children.Add(Number("Радиус", glow.InnerRadius, 0, 100, value => glow.InnerRadius = value));
+        innerGlowFields.Children.Add(Number("Интенсивность, %", glow.InnerIntensity * 100, 0, 500, value => glow.InnerIntensity = value / 100));
+        innerGlowEnabled.IsCheckedChanged += (_, _) => { glow.InnerEnabled = innerGlowEnabled.IsChecked == true; innerGlowFields.IsVisible = glow.InnerEnabled; changed(); };
+        glowPanel.Children.Add(glowEnabled); glowPanel.Children.Add(glowFields); glowPanel.Children.Add(innerGlowEnabled); glowPanel.Children.Add(innerGlowFields); glowPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить свечение", language), () => { current.Glow = new(); ChangedAndRebuild(); })); Children.Add(Section("Свечение", glowPanel));
         var gradient = current.Gradient ??= new();
         gradient.Stops ??= [];
         var gradientPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
@@ -230,8 +308,61 @@ internal sealed class TextEditorPanel : StackPanel
         RefreshStops(); gradientFields.Children.Add(stopsPanel);
         gradientFields.Children.Add(ActionButton(StudioLocalization.Text("Добавить точку", language), () => { gradient.Stops.Add(new() { Position = .5 }); RefreshStops(); changed(); }));
         gradientEnabled.IsCheckedChanged += (_, _) => { gradient.Enabled = gradientEnabled.IsChecked == true; gradientFields.IsVisible = gradient.Enabled; changed(); };
-        gradientPanel.Children.Add(gradientEnabled); gradientPanel.Children.Add(gradientFields); Children.Add(Section("Заливка", gradientPanel));
+        gradientPanel.Children.Add(gradientEnabled); gradientPanel.Children.Add(gradientFields); gradientPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить градиент", language), () => { current.Gradient = new(); ChangedAndRebuild(); })); Children.Add(Section("Заливка", gradientPanel));
+        var extrusion = current.Extrusion ??= new();
+        var extrusionPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
+        var extrusionEnabled = new CheckBox { Content = StudioLocalization.Text("Включить объём", language), IsChecked = extrusion.Enabled };
+        var extrusionFields = new StackPanel { Spacing = 6, IsVisible = extrusion.Enabled };
+        extrusionFields.Children.Add(ColorField("Цвет объёма (#AARRGGBB)", extrusion.Color, value => extrusion.Color = value));
+        extrusionFields.Children.Add(Number("Прозрачность, %", extrusion.Opacity * 100, 0, 100, value => extrusion.Opacity = value / 100));
+        extrusionFields.Children.Add(Number("Глубина", extrusion.Depth, 0, 100, value => extrusion.Depth = value));
+        extrusionFields.Children.Add(Number("Угол, °", extrusion.Angle, -360, 360, value => extrusion.Angle = value));
+        extrusionFields.Children.Add(Number("Затенение, %", extrusion.Shading * 100, 0, 100, value => extrusion.Shading = value / 100));
+        extrusionEnabled.IsCheckedChanged += (_, _) => { extrusion.Enabled = extrusionEnabled.IsChecked == true; extrusionFields.IsVisible = extrusion.Enabled; changed(); };
+        extrusionPanel.Children.Add(extrusionEnabled); extrusionPanel.Children.Add(extrusionFields); extrusionPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить объём", language), () => { current.Extrusion = new(); ChangedAndRebuild(); })); Children.Add(Section("Объём", extrusionPanel));
+        var background = current.Background ??= new();
+        var backgroundPanel = new StackPanel { Spacing = 6, IsEnabled = !current.IsLocked };
+        var backgroundEnabled = new CheckBox { Content = StudioLocalization.Text("Включить подложку", language), IsChecked = background.Enabled };
+        var backgroundFields = new StackPanel { Spacing = 6, IsVisible = background.Enabled };
+        var perLine = new CheckBox { Content = StudioLocalization.Text("Отдельно для каждой строки", language), IsChecked = background.PerLine };
+        perLine.IsCheckedChanged += (_, _) => { background.PerLine = perLine.IsChecked == true; changed(); }; backgroundFields.Children.Add(perLine);
+        backgroundFields.Children.Add(ColorField("Цвет подложки (#AARRGGBB)", background.Color, value => background.Color = value));
+        backgroundFields.Children.Add(Number("Прозрачность, %", background.Opacity * 100, 0, 100, value => background.Opacity = value / 100));
+        backgroundFields.Children.Add(Number("Отступ X", background.PaddingX, 0, 256, value => background.PaddingX = value));
+        backgroundFields.Children.Add(Number("Отступ Y", background.PaddingY, 0, 256, value => background.PaddingY = value));
+        backgroundFields.Children.Add(Number("Скругление", background.Radius, 0, 256, value => background.Radius = value));
+        backgroundFields.Children.Add(ColorField("Цвет границы (#AARRGGBB)", background.BorderColor, value => background.BorderColor = value));
+        backgroundFields.Children.Add(Number("Толщина границы", background.BorderWidth, 0, 100, value => background.BorderWidth = value));
+        var bgGradient = background.Gradient ??= new();
+        bgGradient.Stops ??= [];
+        var bgGradientEnabled = new CheckBox { Content = StudioLocalization.Text("Градиентная заливка", language), IsChecked = bgGradient.Enabled };
+        var bgGradientFields = new StackPanel { Spacing = 6, IsVisible = bgGradient.Enabled };
+        var bgKind = new ComboBox { ItemsSource = new[] { StudioLocalization.Text("Линейный", language), StudioLocalization.Text("Радиальный", language), StudioLocalization.Text("Угловой", language) }, SelectedIndex = (int)bgGradient.Kind, HorizontalAlignment = HorizontalAlignment.Stretch };
+        bgKind.SelectionChanged += (_, _) => { if (bgKind.SelectedIndex >= 0) { bgGradient.Kind = (TextGradientKind)bgKind.SelectedIndex; changed(); } };
+        bgGradientFields.Children.Add(bgKind);
+        bgGradientFields.Children.Add(Number("Угол, °", bgGradient.Angle, -360, 360, value => bgGradient.Angle = value));
+        var bgStops = new StackPanel { Spacing = 6 };
+        void RefreshBackgroundStops()
+        {
+            bgStops.Children.Clear();
+            foreach (var stop in bgGradient.Stops.ToArray())
+            {
+                var row = new StackPanel { Spacing = 4 };
+                row.Children.Add(ColorField("Цвет точки (#AARRGGBB)", stop.Color, value => stop.Color = value));
+                row.Children.Add(Number("Положение точки, %", stop.Position * 100, 0, 100, value => stop.Position = value / 100));
+                var remove = ActionButton(StudioLocalization.Text("Удалить точку", language), () => { bgGradient.Stops.Remove(stop); RefreshBackgroundStops(); changed(); });
+                remove.IsEnabled = bgGradient.Stops.Count > 2; row.Children.Add(remove); bgStops.Children.Add(row);
+            }
+        }
+        RefreshBackgroundStops(); bgGradientFields.Children.Add(bgStops);
+        bgGradientFields.Children.Add(ActionButton(StudioLocalization.Text("Добавить точку", language), () => { bgGradient.Stops.Add(new() { Position = .5 }); RefreshBackgroundStops(); changed(); }));
+        bgGradientEnabled.IsCheckedChanged += (_, _) => { bgGradient.Enabled = bgGradientEnabled.IsChecked == true; bgGradientFields.IsVisible = bgGradient.Enabled; changed(); };
+        backgroundFields.Children.Add(bgGradientEnabled); backgroundFields.Children.Add(bgGradientFields);
+        backgroundEnabled.IsCheckedChanged += (_, _) => { background.Enabled = backgroundEnabled.IsChecked == true; backgroundFields.IsVisible = background.Enabled; changed(); };
+        backgroundPanel.Children.Add(backgroundEnabled); backgroundPanel.Children.Add(backgroundFields); backgroundPanel.Children.Add(ActionButton(StudioLocalization.Text("Сбросить подложку", language), () => { current.Background = new(); ChangedAndRebuild(); })); Children.Add(Section("Подложка", backgroundPanel));
         Children.Add(Section("Положение и поворот", placement));
+        var resetEffects = ActionButton(StudioLocalization.Text("Сбросить все эффекты", language), () => { current.Outlines.Clear(); current.Shadow = new(); current.Glow = new(); current.Gradient = new(); current.Background = new(); current.Extrusion = new(); ChangedAndRebuild(); });
+        resetEffects.IsEnabled = !current.IsLocked; Children.Add(resetEffects);
         StudioLocalization.Capture(this);
         StudioLocalization.Apply(this, language);
         updating = false;
@@ -239,18 +370,31 @@ internal sealed class TextEditorPanel : StackPanel
 
     private Border Section(string title, Control content)
     {
-        var stack = new StackPanel { Spacing = 6 };
-        stack.Children.Add(new TextBlock { Text = title, FontWeight = FontWeight.SemiBold }); stack.Children.Add(content);
-        return new Border { Background = theme.Surface, BorderBrush = theme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(10), Child = stack };
+        var expander = new Expander { Header = StudioLocalization.Text(title, language), Content = content, IsExpanded = expandedSections.TryGetValue(title, out var expanded) ? expanded : title is "Слои текста" or "Текст" };
+        expander.PropertyChanged += (_, e) => { if (e.Property == Expander.IsExpandedProperty) expandedSections[title] = expander.IsExpanded; };
+        return new Border { Background = theme.Surface, BorderBrush = theme.Border, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(10), Child = expander };
     }
 
     private Control Number(string label, double value, double min, double max, Action<double> setter)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"), ColumnSpacing = 8 };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,100"), RowDefinitions = new RowDefinitions("Auto,Auto"), ColumnSpacing = 8 };
         grid.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
         var input = new NumericUpDown { Minimum = (decimal)min, Maximum = (decimal)max, Value = (decimal)Math.Clamp(value, min, max), Increment = 1, ShowButtonSpinner = false, FormatString = "0.##", Height = 34 };
-        input.ValueChanged += (_, _) => { if (!updating && input.Value is { } next) { setter((double)next); changed(); } };
-        Grid.SetColumn(input, 1); grid.Children.Add(input); return grid;
+        var slider = new Slider { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max), HorizontalAlignment = HorizontalAlignment.Stretch };
+        slider.Classes.Add("edit-slider");
+        var synchronizing = false;
+        input.ValueChanged += (_, _) =>
+        {
+            if (updating || synchronizing || input.Value is not { } next) return;
+            synchronizing = true; slider.Value = (double)next; synchronizing = false; setter((double)next); changed();
+        };
+        slider.ValueChanged += (_, _) =>
+        {
+            if (updating || synchronizing) return;
+            synchronizing = true; input.Value = (decimal)slider.Value; synchronizing = false; setter(slider.Value); changed();
+        };
+        Grid.SetColumn(input, 1); grid.Children.Add(input);
+        Grid.SetRow(slider, 1); Grid.SetColumnSpan(slider, 2); grid.Children.Add(slider); return grid;
     }
 
     private Control ColorField(string label, string value, Action<string> setter)
@@ -274,6 +418,31 @@ internal sealed class TextEditorPanel : StackPanel
             popup.Content = new ScrollViewer { MaxHeight = 500, Content = picker, Background = theme.Panel };
             popup.ShowAt(button);
         };
+        return button;
+    }
+
+    private Button StyleButton(TextStyle style, TextLayer target)
+    {
+        var contents = new StackPanel { Spacing = 2 };
+        if (StylePreviewCache.Count > 128) StylePreviewCache.Clear();
+        var key = System.Text.Json.JsonSerializer.Serialize(style);
+        var bytes = StylePreviewCache.GetOrAdd(key, _ =>
+        {
+            var preview = new TextLayer { Text = "Aa", FontSize = 50, X = 256, Y = 256 };
+            style.Apply(preview);
+            using var image = TextLayerRenderer.RenderOverlay([preview]);
+            using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+            return encoded.ToArray();
+        });
+        using (var stream = new MemoryStream(bytes))
+        {
+            var bitmap = new Bitmap(stream);
+            var view = new Image { Source = new CroppedBitmap(bitmap, new PixelRect(128, 206, 256, 100)), Width = 100, Height = 40, Stretch = Stretch.Uniform };
+            view.DetachedFromVisualTree += (_, _) => bitmap.Dispose(); contents.Children.Add(view);
+        }
+        contents.Children.Add(new TextBlock { Text = style.Name, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 112, FontSize = 11 });
+        var button = new Button { Content = contents, Margin = new Thickness(0, 0, 4, 4), Padding = new Thickness(5), MinHeight = 30, Background = theme.Panel, BorderBrush = theme.Border, BorderThickness = new Thickness(1) };
+        button.Click += (_, _) => { style.Apply(target); changed(); Rebuild(); selectionChanged(); };
         return button;
     }
 
