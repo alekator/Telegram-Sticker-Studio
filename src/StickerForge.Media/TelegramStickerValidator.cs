@@ -65,11 +65,14 @@ public sealed class TelegramStickerValidator(FfmpegService ffmpeg)
         ExportDiagnostics.Write($"validation video container=webm codec=vp9 width={width} height={height} bytes={length} duration={duration.ToString(CultureInfo.InvariantCulture)} fps={(n / d).ToString(CultureInfo.InvariantCulture)} frames={count} audio=false alpha={alpha} requiredAlpha={requireAlpha} result=valid");
     }
 
-    public async Task ValidateAlphaAsync(string source, string output, double start, double duration, string filter, CancellationToken token)
+    public async Task ValidateAlphaAsync(string source, string output, double start, double duration, string filter, CancellationToken token, string? overlay = null)
     {
         static string N(double value) => value.ToString("0.########", CultureInfo.InvariantCulture);
         const string analysis = "alphaextract,signalstats,metadata=mode=print:file=-";
-        var original = await ffmpeg.RunEncoderAsync(["-v", "error", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", source, "-t", N(duration), "-filter_complex", filter + "," + analysis, "-f", "null", "-"], token);
+        var arguments = new List<string> { "-v", "error", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", source };
+        if (overlay is not null) arguments.AddRange(["-i", overlay]);
+        arguments.AddRange(["-t", N(duration), "-filter_complex", filter + "," + analysis, "-f", "null", "-"]);
+        var original = await ffmpeg.RunEncoderAsync(arguments.ToArray(), token);
         var encoded = await ffmpeg.RunEncoderAsync(["-v", "error", "-xerror", "-c:v", "libvpx-vp9", "-i", output, "-vf", analysis, "-f", "null", "-"], token);
         static (double Min, double Mean)[] Parse(byte[] data)
         {

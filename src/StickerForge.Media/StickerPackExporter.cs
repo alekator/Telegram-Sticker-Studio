@@ -53,9 +53,9 @@ public sealed class StickerPackExporter
                 var extension = Path.GetExtension(source).ToLowerInvariant();
                 if (extension is not (".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".tif" or ".tiff" or ".gif" or ".apng" or ".mp4" or ".mov" or ".mkv" or ".webm" or ".avi")) extension = "other";
                 ExportDiagnostics.Write($"item {i + 1} sourceType={extension} output={(animated ? "webm" : "webp")}");
-                var bytes = animated ? ConvertAnimation(source, item.Transform, target, token) : tiff
-                    ? ConvertImage(ffmpeg.ReadFrameAsync(source, 0, token).GetAwaiter().GetResult(), item.Transform, token)
-                    : ConvertImage(File.ReadAllBytes(source), item.Transform, token);
+                var bytes = animated ? ConvertAnimation(source, item.Transform, item.TextLayers, target, token) : tiff
+                    ? ConvertImage(ffmpeg.ReadFrameAsync(source, 0, token).GetAwaiter().GetResult(), item.Transform, item.TextLayers, token)
+                    : ConvertImage(File.ReadAllBytes(source), item.Transform, item.TextLayers, token);
                 if (!animated)
                 {
                     using var data = new SKMemoryStream(bytes);
@@ -99,12 +99,12 @@ public sealed class StickerPackExporter
         finally { if (System.IO.Directory.Exists(target)) System.IO.Directory.Delete(target, true); }
     }
 
-    private byte[] ConvertAnimation(string path, TransformSettings transform, string directory, CancellationToken token)
+    private byte[] ConvertAnimation(string path, TransformSettings transform, IReadOnlyList<TextLayer> layers, string directory, CancellationToken token)
     {
         using var input = File.OpenRead(path);
         using var codec = SKCodec.Create(input);
         if (codec is null || codec.EncodedFormat != SKEncodedImageFormat.Webp || codec.FrameCount <= 1)
-            return ConvertVideo(path, transform, directory, token);
+            return ConvertVideo(path, transform, layers, directory, token);
         if (codec.FrameCount > 1000) throw new InvalidDataException("Animation exceeds the frame limit.");
         var work = Path.Combine(directory, ".frames-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
@@ -135,7 +135,7 @@ public sealed class StickerPackExporter
             var settings = new TransformSettings { Fit = transform.Fit, Scale = transform.Scale, OffsetX = transform.OffsetX, OffsetY = transform.OffsetY,
                 Rotation = transform.Rotation, FlipHorizontal = transform.FlipHorizontal, FlipVertical = transform.FlipVertical,
                 StartSeconds = (startMs - frameStart) / 1000, DurationSeconds = transform.DurationSeconds };
-            return ConvertVideo(intermediate, settings, directory, token);
+            return ConvertVideo(intermediate, settings, layers, directory, token);
         }
         finally { Directory.Delete(work, true); }
     }
@@ -148,12 +148,21 @@ public sealed class StickerPackExporter
         return codec is null || codec.FrameCount > 1;
     }
 
-    private byte[] ConvertVideo(string path, TransformSettings transform, string directory, CancellationToken token)
+    private byte[] ConvertVideo(string path, TransformSettings transform, IReadOnlyList<TextLayer> layers, string directory, CancellationToken token)
     {
         var metadata = ffmpeg.ProbeAsync(path, token, exportDiagnostics: true).GetAwaiter().GetResult();
         var start = Math.Clamp(transform.StartSeconds, 0, Math.Max(0, metadata.DurationSeconds - .05));
         var duration = Math.Min(Math.Clamp(transform.DurationSeconds, .05, 3), metadata.DurationSeconds - start);
+        var hasText = layers.Any(layer => layer.IsVisible && !string.IsNullOrEmpty(layer.Text));
         var filter = BuildVideoFilter(metadata, transform, duration);
+        var overlay = hasText ? Path.Combine(directory, $".{Guid.NewGuid():N}.png") : null;
+        if (overlay is not null)
+        {
+            using var image = TextLayerRenderer.RenderOverlay(layers);
+            using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(overlay, png.ToArray());
+            filter += "[base];[1:v]format=rgba[text];[base][text]overlay=0:0:format=auto,format=yuva420p";
+        }
         static string N(double n) => n.ToString("0.########", CultureInfo.InvariantCulture);
         var temp = Path.Combine(directory, $".{Guid.NewGuid():N}.webm");
         try
@@ -162,7 +171,10 @@ public sealed class StickerPackExporter
             foreach (var crf in new[] { 20, 28, 36, 44, 52, 60, 63 })
             {
                 token.ThrowIfCancellationRequested();
-                ffmpeg.RunEncoderAsync(["-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", Path.GetFullPath(path), "-t", N(duration), "-filter_complex", filter, "-an", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-b:v", "0", "-crf", crf.ToString(CultureInfo.InvariantCulture), temp], token).GetAwaiter().GetResult();
+                var arguments = new List<string> { "-v", "error", "-y", "-protocol_whitelist", "file,pipe", "-ss", N(start), "-i", Path.GetFullPath(path) };
+                if (overlay is not null) arguments.AddRange(["-i", overlay]);
+                arguments.AddRange(["-t", N(duration), "-filter_complex", filter, "-an", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", "-b:v", "0", "-crf", crf.ToString(CultureInfo.InvariantCulture), temp]);
+                ffmpeg.RunEncoderAsync(arguments.ToArray(), token).GetAwaiter().GetResult();
                 var fileSize = new FileInfo(temp).Length;
                 ExportDiagnostics.Write($"video encoded sourceDuration={N(metadata.DurationSeconds)} requestedStart={N(transform.StartSeconds)} requestedDuration={N(transform.DurationSeconds)} start={N(start)} duration={N(duration)} sourceFps={N(metadata.FramesPerSecond ?? 30)} outputFps={N(OutputFrameRate(metadata))} crf={crf} bytes={fileSize} maxBytes={256 * 1024} maxDuration=3");
                 if (fileSize > 256 * 1024) continue;
@@ -186,7 +198,7 @@ public sealed class StickerPackExporter
                 {
                     var validator = new TelegramStickerValidator(ffmpeg);
                     validator.ValidateVideoAsync(temp, true, token).GetAwaiter().GetResult();
-                    validator.ValidateAlphaAsync(Path.GetFullPath(path), temp, start, duration, filter, token).GetAwaiter().GetResult();
+                    validator.ValidateAlphaAsync(Path.GetFullPath(path), temp, start, duration, filter, token, overlay).GetAwaiter().GetResult();
                 }
                 catch (InvalidDataException ex)
                 {
@@ -197,7 +209,7 @@ public sealed class StickerPackExporter
             if (lastFailure is not null) throw new InvalidDataException($"Не удалось подготовить корректное видео после 7 попыток: {lastFailure}");
             throw new InvalidDataException("Cannot fit this animation into 256 KiB. Choose a shorter or simpler fragment.");
         }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
+        finally { if (File.Exists(temp)) File.Delete(temp); if (overlay is not null && File.Exists(overlay)) File.Delete(overlay); }
     }
 
     internal static string BuildVideoFilter(VideoMetadata metadata, TransformSettings transform, double duration)
@@ -215,7 +227,7 @@ public sealed class StickerPackExporter
 
     internal static double OutputFrameRate(VideoMetadata metadata) => Math.Ceiling(Math.Clamp(metadata.FramesPerSecond ?? 30, 1, 30));
 
-    private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, CancellationToken token)
+    private static byte[] ConvertImage(byte[] bytes, TransformSettings transform, IReadOnlyList<TextLayer> layers, CancellationToken token)
     {
         using var stream = new MemoryStream(bytes, writable: false);
         if (stream.Length > 100 * 1024 * 1024) throw new InvalidDataException("File exceeds 100 MB.");
@@ -228,7 +240,7 @@ public sealed class StickerPackExporter
         if (codec.GetPixels(bitmap.Info, bitmap.GetPixels()) != SKCodecResult.Success) throw new InvalidDataException("Image decoding failed.");
         token.ThrowIfCancellationRequested();
         using var image = SKImage.FromBitmap(bitmap);
-        using var result = Render(image, transform);
+        using var result = Render(image, transform, layers);
         using var expected = SKBitmap.FromImage(result);
         foreach (var quality in new[] { 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0 })
         {
@@ -249,17 +261,24 @@ public sealed class StickerPackExporter
         throw new InvalidDataException("Cannot fit this image into Telegram's 512 KiB limit without exceeding the format constraints.");
     }
 
-    public static SKImage Render(SKImage image, TransformSettings transform)
+    public static SKImage Render(SKImage image, TransformSettings transform, IReadOnlyList<TextLayer>? layers = null)
     {
         using var surface = SKSurface.Create(new SKImageInfo(Size, Size, SKColorType.Rgba8888, SKAlphaType.Premul)) ?? throw new InvalidDataException("Unable to create image canvas.");
         var canvas = surface.Canvas; canvas.Clear(SKColors.Transparent);
         var sx = (float)Size / image.Width; var sy = (float)Size / image.Height;
         if (transform.Fit != FitMode.Stretch) sx = sy = transform.Fit == FitMode.Fill ? Math.Max(sx, sy) : Math.Min(sx, sy);
         var scale = (float)Math.Clamp(double.IsFinite(transform.Scale) ? transform.Scale : 1, 0.1, 10);
+        canvas.Save();
         canvas.Translate(Size / 2f + (float)transform.OffsetX, Size / 2f + (float)transform.OffsetY);
         canvas.RotateDegrees((float)transform.Rotation);
         canvas.Scale(sx * scale * (transform.FlipHorizontal ? -1 : 1), sy * scale * (transform.FlipVertical ? -1 : 1));
         canvas.DrawImage(image, SKRect.Create(-image.Width / 2f, -image.Height / 2f, image.Width, image.Height), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+        canvas.Restore();
+        if (layers is { Count: > 0 })
+        {
+            using var overlay = TextLayerRenderer.RenderOverlay(layers);
+            canvas.DrawImage(overlay, 0, 0);
+        }
         return surface.Snapshot();
     }
 

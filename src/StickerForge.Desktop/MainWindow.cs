@@ -32,6 +32,9 @@ public sealed class MainWindow : Window
     private readonly ListBox gallery = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TextBox packName = new() { PlaceholderText = "Название набора", Width = 180 };
     private readonly Image preview = new() { Stretch = Stretch.Uniform };
+    private readonly TextOverlayControl textOverlay = new() { Width = 512, Height = 512, IsHitTestVisible = false };
+    private TextEditorPanel? textEditor;
+    private StickerItem? textEditorItem;
     private readonly TextBlock details = new() { Text = "Выберите стикер", TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock status = new() { Text = "Готово" };
     private readonly TextBlock selectionCount = new() { Margin = new Thickness(4, 0, 4, 8), Opacity = .8 };
@@ -228,6 +231,15 @@ public sealed class MainWindow : Window
         var layers = new Grid { Width = 512, Height = 512, ClipToBounds = true };
         layers.Children.Add(new Checkerboard());
         layers.Children.Add(preview);
+        layers.Children.Add(textOverlay);
+        var inlineText = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Width = 240, MinHeight = 48, IsVisible = false };
+        var inlineCanvas = new Canvas { Width = 512, Height = 512 }; inlineCanvas.Children.Add(inlineText); layers.Children.Add(inlineCanvas);
+        inlineText.TextChanged += (_, _) =>
+        {
+            if (inlineText.IsVisible && textEditor?.Selected is { IsLocked: false } layer)
+            { layer.Text = inlineText.Text ?? ""; MarkDirty(); textOverlay.Refresh(); textEditor.RefreshFields(); }
+        };
+        inlineText.LostFocus += (_, _) => inlineText.IsVisible = false;
         layers.Children.Add(new Border { BorderBrush = StudioTheme.StickerBoundaryOuter, BorderThickness = new Thickness(2), IsHitTestVisible = false,
             Child = new Border { BorderBrush = StudioTheme.StickerBoundaryInner, BorderThickness = new Thickness(1), IsHitTestVisible = false } });
         var stickerBoundary = new Border { Width = 512, Height = 512, Child = layers };
@@ -286,7 +298,6 @@ public sealed class MainWindow : Window
         propertiesSplitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, ResizeDirection = GridResizeDirection.Columns, ResizeBehavior = GridResizeBehavior.PreviousAndNext, Background = studioTheme.Border };
         ToolTip.SetTip(propertiesSplitter, "Изменить ширину панели свойств"); Grid.SetColumn(propertiesSplitter, 3); columns.Children.Add(propertiesSplitter);
         var properties = new StackPanel { Spacing = 8 };
-        editingProperties = properties;
         properties.Children.Add(new TextBlock { Text = "Редактирование", FontSize = 17, FontWeight = FontWeight.SemiBold });
         properties.Children.Add(details);
         properties.Children.Add(new TextBlock { Text = "Режим подгонки", FontWeight = FontWeight.SemiBold });
@@ -363,7 +374,34 @@ public sealed class MainWindow : Window
                 UpdateVideoTime(videoSeek.Value);
             }
         };
-        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties); propertyContent.Children.Add(properties);
+        textEditor = new TextEditorPanel(studioTheme, () => { MarkDirty(); textOverlay.Refresh(); }, () => textOverlay.SetSelected(textEditor?.Selected));
+        textOverlay.Changed = () => { MarkDirty(); textEditor.RefreshFields(); };
+        textOverlay.SelectionChanged = layer => textEditor.Select(layer);
+        textOverlay.EditRequested = () =>
+        {
+            if (textEditor.Selected is not { IsLocked: false } layer) return;
+            inlineText.Text = layer.Text;
+            Canvas.SetLeft(inlineText, Math.Clamp(layer.X - 120, 0, 272));
+            Canvas.SetTop(inlineText, Math.Clamp(layer.Y - 24, 0, 440));
+            inlineText.IsVisible = true; inlineText.Focus(); inlineText.SelectAll();
+        };
+        var imageTab = new Button { Content = "Изображение" };
+        var textTab = new Button { Content = "Текст" };
+        var tabs = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 6 };
+        imageTab.HorizontalAlignment = HorizontalAlignment.Stretch; textTab.HorizontalAlignment = HorizontalAlignment.Stretch;
+        Grid.SetColumn(textTab, 1); tabs.Children.Add(imageTab); tabs.Children.Add(textTab);
+        editingProperties = new StackPanel { Spacing = 8 }; editingProperties.Children.Add(tabs); editingProperties.Children.Add(properties); editingProperties.Children.Add(textEditor);
+        void SetTextMode(bool active)
+        {
+            properties.IsVisible = !active; textEditor.IsVisible = active;
+            imageTab.Background = active ? studioTheme.Surface : studioTheme.Accent;
+            textTab.Background = active ? studioTheme.Accent : studioTheme.Surface;
+            textOverlay.Editing = active; textOverlay.IsHitTestVisible = active; textOverlay.InvalidateVisual();
+        }
+        imageTab.Click += (_, _) => SetTextMode(false);
+        textTab.Click += (_, _) => SetTextMode(true);
+        SetTextMode(false);
+        var propertyContent = new Grid(); propertyContent.Children.Add(emptyProperties); propertyContent.Children.Add(editingProperties);
         var propertiesPanel = new Border { Background = studioTheme.Panel, CornerRadius = new CornerRadius(14), Padding = new Thickness(12), Child = new ScrollViewer { Content = propertyContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
         propertiesSide = propertiesPanel;
         Grid.SetColumn(propertiesPanel, 4); columns.Children.Add(propertiesPanel);
@@ -408,6 +446,7 @@ public sealed class MainWindow : Window
         if (Content is Control root) StudioLocalization.Apply(root, preferences.Language);
         if (galleryMenu is not null) StudioLocalization.Apply(galleryMenu, preferences.Language);
         if (projectMenu is not null) StudioLocalization.Apply(projectMenu, preferences.Language);
+        textEditor?.SetLanguage(preferences.Language);
         UpdatePanelButtons();
         foreach (var card in gallery.Items.OfType<ListBoxItem>()) StudioLocalization.Apply(card, preferences.Language);
         packName.PlaceholderText = Tr("Название набора");
@@ -728,7 +767,11 @@ public sealed class MainWindow : Window
             var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = preferences.Language == "en" ? $"Choose a folder for {project.Stickers.Count} stickers" : $"Выберите папку для экспорта {project.Stickers.Count} файлов", AllowMultiple = false });
             var path = folders.FirstOrDefault()?.TryGetLocalPath();
             if (path is null) return;
-            var sources = project.Stickers.ToArray();
+            var sources = project.Stickers.Select(item => new StickerItem
+            {
+                Id = item.Id, SourcePath = item.SourcePath, Transform = CopyTransform(item.Transform),
+                TextLayers = System.Text.Json.JsonSerializer.Deserialize<List<TextLayer>>(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(item.TextLayers)) ?? []
+            }).ToArray();
             var name = project.Name;
             var progressText = new TextBlock { Text = Tr("Подготовка файлов для Telegram"), Foreground = studioTheme.Secondary, TextWrapping = TextWrapping.Wrap, HorizontalAlignment = HorizontalAlignment.Center };
             var progressBar = new ProgressBar { Minimum = 0, Maximum = 1, Height = 10, HorizontalAlignment = HorizontalAlignment.Stretch, Foreground = studioTheme.Accent };
@@ -922,6 +965,14 @@ public sealed class MainWindow : Window
         selectionCount.Text = preferences.Language == "en" ? (count > 0 ? $"Selected: {count} of {project.Stickers.Count}" : $"Files: {project.Stickers.Count}") : (count > 0 ? $"Выбрано: {count} из {project.Stickers.Count}" : $"Всего файлов: {project.Stickers.Count}");
         if (exportButton is not null) { exportButton.Content = preferences.Language == "en" ? $"Export {project.Stickers.Count} stickers" : $"Экспортировать {project.Stickers.Count} стикеров"; exportButton.IsEnabled = project.Stickers.Count > 0 && !busy; }
         var hasSelection = SelectedEntry() is not null;
+        var selectedItem = SelectedEntry()?.Item;
+        if (!ReferenceEquals(textEditorItem, selectedItem))
+        {
+            textEditorItem = selectedItem;
+            textEditor?.SetItem(selectedItem);
+            textOverlay.SetItem(selectedItem);
+            textOverlay.SetSelected(textEditor?.Selected);
+        }
         if (editingProperties is not null) editingProperties.IsVisible = hasSelection;
         emptyProperties.IsVisible = !hasSelection; emptyCanvas.IsVisible = !hasSelection;
         if (previewViewbox is not null) previewViewbox.IsVisible = hasSelection;

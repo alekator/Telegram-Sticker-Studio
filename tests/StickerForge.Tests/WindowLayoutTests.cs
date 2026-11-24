@@ -16,7 +16,7 @@ namespace StickerForge.Tests;
 
 public static class WindowLayoutTestAppBuilder
 {
-    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<WindowLayoutTestApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions());
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<WindowLayoutTestApp>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 }
 
 public sealed class WindowLayoutTestApp : Application
@@ -27,6 +27,105 @@ public sealed class WindowLayoutTestApp : Application
 [Collection("Avalonia Headless")]
 public sealed class WindowLayoutTests
 {
+    [Fact]
+    public async Task TextEditorCanRenderInBothThemes()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-text-render-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(async () =>
+            {
+                var path = Path.Combine(directory, "sample.png");
+                using (var image = new SKBitmap(512, 400))
+                {
+                    using var canvas = new SKCanvas(image); canvas.Clear(new SKColor(34, 85, 131));
+                    using var paint = new SKPaint { Color = new SKColor(41, 157, 200), IsAntialias = true };
+                    canvas.DrawCircle(256, 200, 150, paint);
+                    using var frame = SKImage.FromBitmap(image); using var png = frame.Encode(SKEncodedImageFormat.Png, 100); File.WriteAllBytes(path, png.ToArray());
+                }
+                foreach (var theme in new[] { "dark", "light" })
+                {
+                    var preferences = new UiPreferencesStore(Path.Combine(directory, theme + ".json")); preferences.Save(new UiPreferences("ru", theme));
+                    var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, theme + "-panels.json")), preferences) { Width = 1280, Height = 800 }; window.Show();
+                    try
+                    {
+                        await (Task)typeof(MainWindow).GetMethod("ImportAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [new[] { path }])!;
+                        var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!; gallery.SelectedIndex = 0; await Task.Delay(100);
+                        var tab = window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Текст"); tab.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(30);
+                        var add = window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Добавить текст"); add.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(100);
+                        using var screenshot = window.CaptureRenderedFrame(); Assert.NotNull(screenshot);
+                        var output = Environment.GetEnvironmentVariable("STICKERFORGE_SCREENSHOT_DIR") ?? AppContext.BaseDirectory;
+                        Directory.CreateDirectory(output); screenshot.Save(Path.Combine(output, "text-editor-" + theme + ".png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+                    }
+                    finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
+                }
+                return true;
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task TextPanelAndCanvasManipulateTheSelectedSticker()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sf-text-ui-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            using var session = HeadlessUnitTestSession.StartNew(typeof(WindowLayoutTestAppBuilder));
+            await session.Dispatch(async () =>
+            {
+                var path = Path.Combine(directory, "a.png");
+                using (var image = new SKBitmap(32, 24)) using (var frame = SKImage.FromBitmap(image)) using (var png = frame.Encode(SKEncodedImageFormat.Png, 100)) File.WriteAllBytes(path, png.ToArray());
+                var window = new MainWindow(new PanelLayoutStore(Path.Combine(directory, "layout.json")), new UiPreferencesStore(Path.Combine(directory, "ui.json"))) { Width = 1280, Height = 800 };
+                window.Show();
+                try
+                {
+                    await (Task)typeof(MainWindow).GetMethod("ImportAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [new[] { path }])!;
+                    var gallery = (ListBox)typeof(MainWindow).GetField("gallery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    gallery.SelectedIndex = 0; await Task.Delay(100);
+                    var tab = window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Текст");
+                    tab.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+                    var add = window.GetVisualDescendants().OfType<Button>().First(b => (b.Content as string) == "Добавить текст");
+                    add.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+                    var project = (StickerForge.Core.StickerProject)typeof(MainWindow).GetField("project", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var layer = Assert.Single(project.Stickers[0].TextLayers);
+                    var overlay = (Control)typeof(MainWindow).GetField("textOverlay", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var from = overlay.TranslatePoint(new Point(layer.X, layer.Y), window)!.Value;
+                    var to = overlay.TranslatePoint(new Point(layer.X + 30, layer.Y + 20), window)!.Value;
+                    window.MouseDown(from, MouseButton.Left, RawInputModifiers.None); window.MouseMove(to, RawInputModifiers.LeftMouseButton); window.MouseUp(to, MouseButton.Left, RawInputModifiers.None); await Task.Delay(50);
+                    Assert.InRange(layer.X, 285, 287); Assert.InRange(layer.Y, 275, 277);
+                    Assert.True((bool)typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!);
+                    var panel = (Control)typeof(MainWindow).GetField("textEditor", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var xRow = panel.GetVisualDescendants().OfType<Grid>().Single(row => row.Children.OfType<TextBlock>().Any(label => label.Text == "Положение X"));
+                    var xInput = xRow.Children.OfType<NumericUpDown>().Single();
+                    Assert.InRange(xInput.Value!.Value, 285, 287);
+                    xInput.Value = 100; Assert.Equal(100, layer.X);
+                    var boundsMethod = overlay.GetType().GetMethod("LocalBounds", BindingFlags.Static | BindingFlags.NonPublic)!;
+                    var bounds = (Rect)boundsMethod.Invoke(null, [layer])!;
+                    from = overlay.TranslatePoint(new Point(layer.X + bounds.Right, layer.Y + bounds.Bottom), window)!.Value;
+                    to = overlay.TranslatePoint(new Point(layer.X + bounds.Right * 1.4, layer.Y + bounds.Bottom * 1.4), window)!.Value;
+                    window.MouseDown(from, MouseButton.Left, RawInputModifiers.None); window.MouseMove(to, RawInputModifiers.LeftMouseButton); window.MouseUp(to, MouseButton.Left, RawInputModifiers.None); await Task.Delay(30);
+                    Assert.InRange(layer.Scale, 1.3, 1.5);
+                    bounds = (Rect)boundsMethod.Invoke(null, [layer])!;
+                    from = overlay.TranslatePoint(new Point(layer.X + bounds.Center.X, layer.Y + bounds.Top - 18), window)!.Value;
+                    to = overlay.TranslatePoint(new Point(layer.X + 60, layer.Y), window)!.Value;
+                    window.MouseDown(from, MouseButton.Left, RawInputModifiers.None); window.MouseMove(to, RawInputModifiers.LeftMouseButton); window.MouseUp(to, MouseButton.Left, RawInputModifiers.None); await Task.Delay(30);
+                    Assert.InRange(layer.Rotation, 85, 95);
+                    var content = window.GetVisualDescendants().OfType<TextBox>().First(box => box.AcceptsReturn && box.IsVisible && box.Text == "Текст");
+                    content.Text = "Привет\nWorld"; await Task.Delay(50); Assert.Equal("Привет\nWorld", layer.Text);
+                    var duplicate = window.GetVisualDescendants().OfType<Button>().First(button => (button.Content as string) == "Дублировать");
+                    duplicate.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+                    Assert.Equal(2, project.Stickers[0].TextLayers.Count);
+                    var copy = project.Stickers[0].TextLayers[1]; Assert.NotEqual(layer.Id, copy.Id); Assert.Equal(layer.Text, copy.Text); Assert.Equal(layer.X + 12, copy.X);
+                }
+                finally { typeof(MainWindow).GetField("dirty", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false); window.Close(); }
+                return true;
+            }, CancellationToken.None);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [Fact]
     public async Task PanelsFitSmallAndLargeWindowsAndRestoreState()
     {

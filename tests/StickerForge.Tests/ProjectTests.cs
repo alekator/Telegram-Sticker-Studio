@@ -51,13 +51,31 @@ public sealed class ProjectTests : IDisposable
         await File.WriteAllTextAsync(path, """
             {"schemaVersion":1,"name":"old","stickers":[{"id":"11111111-1111-1111-1111-111111111111","sourcePath":"image.png","transform":{"fit":1,"scale":1.5,"offsetX":12,"rotation":90}}]}
             """);
-        var transform = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers).Transform;
+        var item = Assert.Single((await new ProjectStore().LoadAsync(path)).Stickers);
+        Assert.Empty(item.TextLayers);
+        var transform = item.Transform;
         Assert.Equal(FitMode.Fill, transform.Fit); Assert.Equal(1.5, transform.Scale); Assert.Equal(12, transform.OffsetX); Assert.Equal(90, transform.Rotation);
         Assert.False(transform.FlipHorizontal); Assert.False(transform.FlipVertical);
     }
 
     [Fact]
     public void NewProjectIsEmpty() => Assert.Empty(new StickerProject().Stickers);
+
+    [Fact]
+    public async Task TextLayersRoundTripIndependentlyAndInOrder()
+    {
+        var path = Path.Combine(directory, "text.json");
+        var first = new TextLayer { Name = "Первый", Text = "Привет\nworld", X = 42, Y = 180, Rotation = -25, IsLocked = true };
+        var second = new TextLayer { Text = "Second", IsVisible = false, LetterSpacing = 2 };
+        var project = new StickerProject { Stickers = [new() { SourcePath = Path.Combine(directory, "one.png"), TextLayers = [first, second] }, new() { SourcePath = Path.Combine(directory, "two.gif") }] };
+        var store = new ProjectStore();
+        await store.SaveAsync(project, path);
+        var loaded = await store.LoadAsync(path);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(project.Stickers[0].TextLayers), System.Text.Json.JsonSerializer.Serialize(loaded.Stickers[0].TextLayers));
+        Assert.Empty(loaded.Stickers[1].TextLayers);
+        loaded.Stickers[1].TextLayers.Add(new TextLayer());
+        Assert.Equal(2, loaded.Stickers[0].TextLayers.Count);
+    }
 
     [Fact]
     public void PanelLayoutRestoresWidthsAndVisibilityAndToleratesDamagedSettings()

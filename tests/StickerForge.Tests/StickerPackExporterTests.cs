@@ -6,6 +6,42 @@ namespace StickerForge.Tests;
 
 public sealed class StickerPackExporterTests : IDisposable
 {
+    [Theory]
+    [InlineData("with-text.png", SKEncodedImageFormat.Png)]
+    [InlineData("with-text.jpg", SKEncodedImageFormat.Jpeg)]
+    public async Task StaticTextLayersUseTheSameCompositionForPreviewAndExport(string filename, SKEncodedImageFormat format)
+    {
+        var path = Image(filename, format);
+        var transform = new TransformSettings { Rotation = -35, FlipHorizontal = true, Scale = .8 };
+        var layers = new List<TextLayer> { new() { Text = "Привет\nWorld", X = 210, Y = 80, FontSize = 50, Color = "#FFFFFFFF" }, new() { Text = "hidden", IsVisible = false } };
+        using var image = SKImage.FromEncodedData(path); using var preview = StickerPackExporter.Render(image, transform, layers); using var expected = SKBitmap.FromImage(preview);
+        var report = await new StickerPackExporter().ExportAsync([new StickerItem { SourcePath = path, Transform = transform, TextLayers = layers }], directory, "text");
+        Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors));
+        using var actual = SKBitmap.Decode(Path.Combine(report.Directory, "001.webp"));
+        var opaque = 0;
+        for (var y = 0; y < 150; y++) for (var x = 0; x < 512; x++)
+        {
+            var a = actual.GetPixel(x, y); var e = expected.GetPixel(x, y);
+            Assert.InRange(Math.Abs(a.Alpha - e.Alpha), 0, 2);
+            if (e.Alpha > 128) opaque++;
+        }
+        Assert.True(opaque > 50);
+    }
+    [Fact]
+    public void TextLayerOrderVisibilityAndTransformAffectTheSharedOverlay()
+    {
+        var first = new TextLayer { Text = "Мир\nHi", X = 180, Y = 180, FontSize = 64, Color = "#FFFF0000", Scale = 1.2, Rotation = 22 };
+        var second = new TextLayer { Text = first.Text, X = first.X, Y = first.Y, FontSize = first.FontSize, Color = "#FF0000FF", Scale = first.Scale, Rotation = first.Rotation };
+        using var overlay = TextLayerRenderer.RenderOverlay([first, second]); using var bitmap = SKBitmap.FromImage(overlay);
+        var bluePixels = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++) { var pixel = bitmap.GetPixel(x, y); if (pixel.Blue > 200 && pixel.Red < 30 && pixel.Alpha > 200) bluePixels++; }
+        Assert.True(bluePixels > 20);
+        second.IsVisible = false;
+        using var hidden = TextLayerRenderer.RenderOverlay([first, second]); using var hiddenBitmap = SKBitmap.FromImage(hidden);
+        var redPixels = 0;
+        for (var y = 0; y < 512; y++) for (var x = 0; x < 512; x++) { var pixel = hiddenBitmap.GetPixel(x, y); if (pixel.Red > 200 && pixel.Blue < 30 && pixel.Alpha > 200) redPixels++; }
+        Assert.True(redPixels > 20);
+    }
     private sealed class CallbackProgress(Action<ExportProgress> action) : IProgress<ExportProgress> { public void Report(ExportProgress value) => action(value); }
     [Theory]
     [InlineData(false, false, 255, 0)]

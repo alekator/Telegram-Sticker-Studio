@@ -45,6 +45,7 @@ internal static class StudioLocalization
         , ["Свернуть галерею"] = "Hide gallery", ["Показать галерею"] = "Show gallery", ["Свернуть свойства"] = "Hide properties", ["Показать свойства"] = "Show properties"
         , ["Размер и положение"] = "Size and position", ["Поворот и отражение"] = "Rotation and flip", ["Просмотр"] = "View"
         , ["Экспорт завершён!"] = "Export complete!", ["Продолжить работу"] = "Back to editing", ["НЕТ ФАЙЛА"] = "FILE MISSING", ["ТЕКУЩИЙ"] = "CURRENT", ["Лицензии"] = "Licenses"
+        , ["Изображение"] = "Image", ["Текст"] = "Text", ["Слои текста"] = "Text layers", ["Добавить текст"] = "Add text", ["Дублировать"] = "Duplicate", ["Вверх"] = "Up", ["Вниз"] = "Down", ["Видимый"] = "Visible", ["Заблокирован"] = "Locked", ["Название слоя"] = "Layer name", ["Шрифт"] = "Font", ["Жирный"] = "Bold", ["Курсив"] = "Italic", ["Размер"] = "Size", ["Цвет (#AARRGGBB)"] = "Color (#AARRGGBB)", ["Прозрачность, %"] = "Opacity, %", ["Выравнивание"] = "Alignment", ["Слева"] = "Left", ["По центру"] = "Center", ["Справа"] = "Right", ["Межстрочный интервал"] = "Line spacing", ["Межбуквенный интервал"] = "Letter spacing", ["Положение и поворот"] = "Position and rotation"
     };
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, LocalizedKey> TooltipKeys = new();
     public static string Text(string text, string language) => language == "en" && English.TryGetValue(text, out var value) ? value : text;

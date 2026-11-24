@@ -16,6 +16,35 @@ public sealed class FfmpegIntegrationFactAttribute : FactAttribute
 
 public sealed class VideoIntegrationTests
 {
+    [FfmpegIntegrationFact]
+    public async Task TextIsCompositedOnEveryAnimatedFrame()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "stickerforge-text-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var (name, codec) in new[] { ("source.mp4", "mpeg4"), ("source.gif", "gif") })
+            {
+                var path = Path.Combine(dir, name);
+                await RunAsync("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=96x48:r=10", "-t", "1", "-c:v", codec, "-y", path);
+                var layer = new TextLayer { Text = "Привет!", FontSize = 54, X = 256, Y = 50 };
+                var report = await new StickerPackExporter(new FfmpegService()).ExportAsync([new StickerItem { SourcePath = path, TextLayers = [layer] }], dir, name + "-out");
+                Assert.True(report.Errors.Count == 0, string.Join("; ", report.Errors));
+                foreach (var time in new[] { 0d, .5d })
+                {
+                    var start = new ProcessStartInfo("ffmpeg") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                    foreach (var arg in new[] { "-v", "error", "-c:v", "libvpx-vp9", "-ss", time.ToString(System.Globalization.CultureInfo.InvariantCulture), "-i", Path.Combine(report.Directory, "001.webm"), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1" }) start.ArgumentList.Add(arg);
+                    using var process = Process.Start(start)!; using var bytes = new MemoryStream(); var errors = process.StandardError.ReadToEndAsync();
+                    await process.StandardOutput.BaseStream.CopyToAsync(bytes); await process.WaitForExitAsync(); Assert.True(process.ExitCode == 0, await errors);
+                    using var frame = SKBitmap.Decode(bytes.ToArray());
+                    var count = 0;
+                    for (var y = 10; y < 95; y++) for (var x = 40; x < 470; x++) if (frame.GetPixel(x, y).Alpha > 128) count++;
+                    Assert.True(count > 50, $"Text missing from {name} at {time}s");
+                }
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     private static async Task CheckReflectionsAsync(string path, string directory, string name)
     {
         var service = new FfmpegService(); var metadata = await service.ProbeAsync(path);
